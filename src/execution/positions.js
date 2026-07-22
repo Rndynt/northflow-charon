@@ -1,7 +1,7 @@
 import { now, json } from '../utils.js';
-import { numSetting, boolSetting, strategyById } from '../db/settings.js';
+import { numSetting, boolSetting, strategyById, slippageAdjustedMcap } from '../db/settings.js';
 import { db } from '../db/connection.js';
-import { firstPositiveNumber, marketCapFromGmgn, tokenPriceFromGmgn } from '../utils.js';
+import { firstPositiveNumber, marketCapFromGmgn, tokenPriceFromGmgn, computeAtrPercent, dynamicStopLossPercent } from '../utils.js';
 import { fetchGmgnTokenInfo } from '../enrichment/gmgn.js';
 import { fetchJupiterAsset, fetchJupiterHolders, fetchJupiterChartContext, fetchJupiterWalletPnl } from '../enrichment/jupiter.js';
 import { liveWalletPubkey } from '../liveExecutor.js';
@@ -30,10 +30,27 @@ export async function freshEntryMarket(mint, candidate) {
 export async function refreshCandidateForExecution(row) {
   const candidate = row.candidate;
   const mint = candidate.token.mint;
-  const gmgn = await fetchGmgnTokenInfo(mint, false);
-  const asset = await fetchJupiterAsset(mint, { useCache: false });
-  const holders = await fetchJupiterHolders(mint);
-  const chart = await fetchJupiterChartContext(mint);
+  const route = candidate.signals?.route || '';
+  const isFresh = route.includes('pumpportal_graduated');
+
+  let gmgn, asset, holders, chart;
+
+  if (isFresh) {
+    // Fast path: skip GMGN (Cloudflare blocked) and chart (no data for freshly graduated)
+    [asset, holders] = await Promise.all([
+      fetchJupiterAsset(mint, { useCache: false }),
+      fetchJupiterHolders(mint),
+    ]);
+    gmgn = null;
+    chart = null;
+  } else {
+    [gmgn, asset, holders] = await Promise.all([
+      fetchGmgnTokenInfo(mint, false),
+      fetchJupiterAsset(mint, { useCache: false }),
+      fetchJupiterHolders(mint),
+    ]);
+    chart = null;  // chart not used in buy path — saves 10s timeout
+  }
   const selectedTrending = trending.get(mint) || candidate.trending || null;
   const selectedHolders = holders?.holders?.length ? holders : candidate.holders;
   const selectedSavedWalletExposure = selectedHolders
@@ -108,12 +125,17 @@ export async function refreshCandidateForExecution(row) {
 const sellInProgress = new Set();
 
 export async function refreshPosition(position, { autoExit = true, jupiterPnl = null } = {}) {
-  const asset = await fetchJupiterAsset(position.mint);
-  const price = firstPositiveNumber(asset?.usdPrice, position.high_water_price, position.entry_price);
-  const mcap = firstPositiveNumber(asset?.mcap, asset?.fdv, position.high_water_mcap, position.entry_mcap);
+  // Bug2 fix (2026-06-19): bypass 20s cache for live monitoring — flash crash detection requires fresh data
+  const asset = await fetchJupiterAsset(position.mint, { useCache: false, ttlMs: 3000 });
+  const jupiterPrice = Number(asset?.usdPrice);
+  const jupiterMcap = firstPositiveNumber(asset?.mcap, asset?.fdv);
+  // Guard 1 DISABLED (2026-07-17): can't distinguish crash vs stale data — single source (Jupiter) is unreliable
+  const price = firstPositiveNumber(jupiterPrice || null, position.high_water_price, position.entry_price);
+  const mcap = firstPositiveNumber(jupiterMcap, position.high_water_mcap, position.entry_mcap);
   if (!Number.isFinite(Number(mcap)) || !Number.isFinite(Number(position.entry_mcap)) || Number(position.entry_mcap) <= 0) {
     return null;
   }
+  // Guard 2 DISABLED (2026-07-17): drop >80% heuristic can't distinguish crash vs stale bonding curve data
   const highWaterMcap = Math.max(Number(position.high_water_mcap || 0), Number(mcap));
   const highWaterPrice = Math.max(Number(position.high_water_price || 0), Number(price || 0));
   let pnlPercent = (Number(mcap) / Number(position.entry_mcap) - 1) * 100;
@@ -122,18 +144,66 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
     pnlPercent = Number(jupiterPnl.totalPnlPercentageNative);
     pnlSol = Number.isFinite(Number(jupiterPnl.totalPnlNative)) ? Number(jupiterPnl.totalPnlNative) : pnlSol;
   }
+  // Dynamic ATR-based stop loss: fetch chart context and compute ATR% to widen/narrow the static sl_percent.
+  const stratForSl = strategyById(position.strategy_id);
+  const useDynamicSl = (stratForSl?.use_dynamic_sl ?? numSetting('use_dynamic_sl', 1)) ? true : false;
+  let effectiveSlPercent = Number(position.sl_percent);
+  let atrPercent = null;
+  if (useDynamicSl) {
+    try {
+      const chart = await fetchJupiterChartContext(position.mint);
+      const windows = Array.isArray(chart?.windows) ? chart.windows : [];
+      atrPercent = computeAtrPercent(windows, numSetting('atr_period', 14));
+      effectiveSlPercent = dynamicStopLossPercent({
+        baseSlPercent: Number(position.sl_percent),
+        atrPercent,
+        multiplier: Number(stratForSl?.atr_sl_multiplier ?? numSetting('atr_sl_multiplier', 1.5)),
+        floorPercent: Number(stratForSl?.atr_sl_floor_percent ?? numSetting('atr_sl_floor_percent', -50)),
+        ceilingPercent: Number(stratForSl?.atr_sl_ceiling_percent ?? numSetting('atr_sl_ceiling_percent', -8)),
+        minAtrPercent: Number(stratForSl?.atr_sl_min_atr_percent ?? numSetting('atr_sl_min_atr_percent', 4)),
+        maxAtrPercent: Number(stratForSl?.atr_sl_max_atr_percent ?? numSetting('atr_sl_max_atr_percent', 30)),
+      });
+    } catch (err) {
+      console.log(`[atr] chart refresh failed for ${position.mint.slice(0, 8)}... ${err.message}`);
+    }
+  }
   const tpHit = pnlPercent >= Number(position.tp_percent);
-  const slHit = pnlPercent <= Number(position.sl_percent);
-  const trailingArmed = position.trailing_armed || (position.trailing_enabled && tpHit);
+  const slHit = pnlPercent <= effectiveSlPercent && pnlPercent < 0; // Lesson 3: don't SL if PnL positive
+  const armThreshold = numSetting('trailing_arm_percent', Number(position.tp_percent));
+  const armHit = pnlPercent >= armThreshold;
+  const trailingArmed = position.trailing_armed || (position.trailing_enabled && armHit);
   const trailDrop = highWaterMcap > 0 ? (Number(mcap) / highWaterMcap - 1) * 100 : 0;
-  const trailingHit = trailingArmed && position.trailing_enabled && trailDrop <= -Math.abs(Number(position.trailing_percent));
+  const trailingHit = trailingArmed && position.trailing_enabled && pnlPercent > 0 && trailDrop <= -Math.abs(Number(position.trailing_percent));
   let exitReason = null;
   let closed = false;
 
-  // Max hold time check
+  // Max hold time check — tiered by entry mcap
   const strat = strategyById(position.strategy_id);
-  if (strat?.max_hold_ms > 0 && (now() - position.opened_at_ms) >= strat.max_hold_ms) {
+  const entryMcap = Number(position.entry_mcap) || 0;
+  const isMicrocap = entryMcap > 0 && entryMcap < 15000;
+  const isHighcap = entryMcap >= 60000;
+  let effectiveMaxHold = strat?.max_hold_ms ?? 0;
+  // === AUDIT MODE: tiered max_hold disabled for 3-day data collection (2026-07-05) ===
+  // if (isMicrocap) {
+  //   effectiveMaxHold = 600000; // 10 min for microcap <15K
+  //   console.log(`[position] microcap <15K — max_hold reduced to 10min`);
+  // } else if (isHighcap) {
+  //   effectiveMaxHold = 900000; // 15 min for highcap >60K
+  //   console.log(`[position] highcap >60K — max_hold reduced to 15min`);
+  // }
+  if (effectiveMaxHold > 0 && (now() - position.opened_at_ms) >= effectiveMaxHold) {
     exitReason = 'MAX_HOLD';
+  }
+
+  // Sideways timeout: if open too long with negligible PnL, exit to free up capital.
+  if (!exitReason) {
+    const sidewaysMinutes = Number(strat?.sideways_timeout_minutes ?? numSetting('sideways_timeout_minutes', 0));
+    if (sidewaysMinutes > 0) {
+      const ageSeconds = (now() - position.opened_at_ms) / 1000;
+      if (ageSeconds > sidewaysMinutes * 60 && Math.abs(pnlPercent) < 2) {
+        exitReason = 'SIDEWAYS_TIMEOUT';
+      }
+    }
   }
 
   // Partial TP check
@@ -202,18 +272,24 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
     db.prepare(`
       INSERT INTO dry_run_trades (position_id, mint, side, at_ms, price, mcap, size_sol, token_amount_est, reason, payload_json)
       VALUES (?, ?, 'sell', ?, ?, ?, ?, ?, ?, ?)
-    `).run(position.id, position.mint, now(), price, mcap, position.size_sol, position.token_amount_est, exitReason, json({ pnlPercent: finalPnlPercent, pnlSol: finalPnlSol, receivedSol: receivedSol ?? null, sell }));
+    `).run(position.id, position.mint, now(), price, mcap, position.size_sol, position.token_amount_est, exitReason, json({ pnlPercent: finalPnlPercent, pnlSol: finalPnlSol, receivedSol: receivedSol ?? null, sell, effectiveSlPercent, atrPercent, baseSlPercent: Number(position.sl_percent) }));
     closed = true;
   } else if (exitReason && autoExit) {
+    // Apply exit slippage for dry_run PnL
+    const exitMcap = slippageAdjustedMcap(mcap, 'exit');
+    const dryPnlPercent = (Number(exitMcap) / Number(position.entry_mcap) - 1) * 100;
+    const dryPnlSol = Number(position.size_sol) * dryPnlPercent / 100;
     db.prepare(`
       UPDATE dry_run_positions
       SET status = 'closed', closed_at_ms = ?, exit_price = ?, exit_mcap = ?, exit_reason = ?, pnl_percent = ?, pnl_sol = ?
       WHERE id = ?
-    `).run(now(), price, mcap, exitReason, pnlPercent, pnlSol, position.id);
+    `).run(now(), price, exitMcap, exitReason, dryPnlPercent, dryPnlSol, position.id);
     db.prepare(`
       INSERT INTO dry_run_trades (position_id, mint, side, at_ms, price, mcap, size_sol, token_amount_est, reason, payload_json)
       VALUES (?, ?, 'sell', ?, ?, ?, ?, ?, ?, ?)
-    `).run(position.id, position.mint, now(), price, mcap, position.size_sol, position.token_amount_est, exitReason, json({ pnlPercent, pnlSol }));
+    `).run(position.id, position.mint, now(), price, exitMcap, position.size_sol, position.token_amount_est, exitReason, json({ pnlPercent: dryPnlPercent, pnlSol: dryPnlSol, effectiveSlPercent, atrPercent, baseSlPercent: Number(position.sl_percent), slippage_pct: numSetting('dry_run_slippage_percent', 0) }));
+    finalPnlPercent = dryPnlPercent;
+    finalPnlSol = dryPnlSol;
     closed = true;
   }
   return {

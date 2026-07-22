@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.example
+.pumpportal_key
 node_modules/
 *.sqlite
 *.sqlite-*
@@ -9,5 +10,7 @@ node_modules/
 *.log
 .DS_Store
 npm-debug.log*
+backup_*/
+_*.cjs
 
 ARCHITECTURE.md

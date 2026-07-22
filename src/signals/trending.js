@@ -8,9 +8,14 @@ import { normalizeJupiterTrendingRow } from '../enrichment/jupiter.js';
 
 export const trending = new Map();
 let degenHandler = null;
+let trendingCandidateHandler = null;
 
 export function setDegenHandler(fn) {
   degenHandler = fn;
+}
+
+export function setTrendingCandidateHandler(fn) {
+  trendingCandidateHandler = fn;
 }
 
 export function storeSignalEvent(mint, kind, source, payload) {
@@ -25,14 +30,28 @@ export function trendingSignalPass(row) {
   const swaps = Number(row?.swaps ?? 0);
   const rugRatio = Number(row?.rug_ratio ?? 0);
   const bundlerRate = Number(row?.bundler_rate ?? 0);
-  const minVolume = numSetting('trending_min_volume_usd', 0);
-  const minSwaps = numSetting('trending_min_swaps', 0);
-  const maxRugRatio = numSetting('trending_max_rug_ratio', 0.3);
-  const maxBundlerRate = numSetting('trending_max_bundler_rate', 0.5);
+  const holderCount = Number(row?.holder_count ?? 0);
+  const top10Rate = Number(row?.top_10_holder_rate ?? 0);
+  const marketCap = Number(row?.market_cap ?? 0);
+  const botDegenRate = Number(row?.bot_degen_rate ?? 0);
+  const minVolume = numSetting('trending_min_volume_usd', 50000);
+  const minSwaps = numSetting('trending_min_swaps', 500);
+  const minHolders = numSetting('trending_min_holders', 100);
+  const maxTop10Rate = numSetting('trending_max_top10_rate', 0.3);
+  const minMcap = numSetting('trending_min_mcap_usd', 15000);
+  const maxMcap = numSetting('trending_max_mcap_usd', 100000);
+  const maxRugRatio = numSetting('trending_max_rug_ratio', 0.1);
+  const maxBundlerRate = numSetting('trending_max_bundler_rate', 0.3);
+  const maxBotDegenRate = numSetting('trending_max_bot_degen_rate', 0.5);
   if (minVolume > 0 && (!Number.isFinite(volume) || volume < minVolume)) return false;
   if (minSwaps > 0 && (!Number.isFinite(swaps) || swaps < minSwaps)) return false;
+  if (minHolders > 0 && (!Number.isFinite(holderCount) || holderCount < minHolders)) return false;
+  if (maxTop10Rate > 0 && Number.isFinite(top10Rate) && top10Rate > maxTop10Rate) return false;
+  if (minMcap > 0 && (!Number.isFinite(marketCap) || marketCap < minMcap)) return false;
+  if (maxMcap > 0 && Number.isFinite(marketCap) && marketCap > maxMcap) return false;
   if (maxRugRatio > 0 && Number.isFinite(rugRatio) && rugRatio > maxRugRatio) return false;
   if (maxBundlerRate > 0 && Number.isFinite(bundlerRate) && bundlerRate > maxBundlerRate) return false;
+  if (maxBotDegenRate > 0 && Number.isFinite(botDegenRate) && botDegenRate > maxBotDegenRate) return false;
   if (row?.is_wash_trading === true || row?.is_wash_trading === 1) return false;
   return true;
 }
@@ -94,16 +113,27 @@ export async function fetchGmgnTrending() {
       if (Number(token.seenAt || 0) < cutoff) trending.delete(mint);
     }
     let tracked = 0;
+    let skipped = 0;
     for (const [index, row] of rows.entries()) {
       const mint = row?.address || row?.mint;
       if (!mint || !String(mint).endsWith('pump') || !trendingSignalPass(row)) continue;
+      // Dedup: skip if already tracked in this trending map (prevents re-trigger every poll cycle)
+      if (trending.has(mint)) {
+        skipped++;
+        continue;
+      }
       const token = { ...row, address: mint, interval, rank: index + 1, seenAt };
       trending.set(mint, token);
-      tracked += 1;
+      tracked++;
       storeSignalEvent(mint, 'trending', token.source || source, token);
       if (degenHandler) await degenHandler(mint, token);
+      if (trendingCandidateHandler) {
+        trendingCandidateHandler({ mint, trendingToken: token, route: 'trending' }).catch(err =>
+          console.log(`[trending] candidate trigger failed for ${mint.slice(0, 8)}: ${err.message}`),
+        );
+      }
     }
-    console.log(`[trending:${source}] loaded ${rows.length}, accepted ${tracked}, tracking ${trending.size}`);
+    console.log(`[trending:${source}] loaded ${rows.length}, accepted ${tracked}, skipped ${skipped}, tracking ${trending.size}`);
   } catch (err) {
     if (source === 'gmgn') setGmgnBackoff('trending', err);
     const status = err.response?.status || '';

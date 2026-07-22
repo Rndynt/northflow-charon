@@ -159,3 +159,50 @@ export function makeFailureTracker(name, alertFn, threshold = 3) {
     }
   };
 }
+
+function trueRange(candle) {
+  const high = Number(candle?.high);
+  const low = Number(candle?.low);
+  const prevClose = Number(candle?.prevClose ?? candle?.close);
+  if (!Number.isFinite(high) || !Number.isFinite(low)) return null;
+  if (Number.isFinite(prevClose)) {
+    return Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
+  }
+  return high - low;
+}
+
+export function computeAtrPercent(chartWindows = [], period = 14) {
+  const windows = Array.isArray(chartWindows) ? chartWindows : [];
+  for (const window of windows) {
+    const candles = Array.isArray(window?.candles) ? window.candles : null;
+    if (!candles || candles.length < 3) continue;
+    const rawCandles = candles.map(c => ({
+      high: Number(c?.h ?? c?.high),
+      low: Number(c?.l ?? c?.low),
+      close: Number(c?.c ?? c?.close),
+    }));
+    for (let i = 0; i < rawCandles.length; i++) {
+      rawCandles[i].prevClose = i === 0 ? null : rawCandles[i - 1].close;
+      const tr = trueRange(rawCandles[i]);
+      rawCandles[i].tr = tr != null ? tr : 0;
+    }
+    const lastN = rawCandles.slice(-period);
+    const atr = lastN.reduce((sum, candle) => sum + Number(candle.tr || 0), 0) / lastN.length;
+    const lastClose = rawCandles[rawCandles.length - 1]?.close;
+    if (atr > 0 && Number.isFinite(lastClose) && lastClose > 0) {
+      return (atr / lastClose) * 100;
+    }
+  }
+  return null;
+}
+
+export function dynamicStopLossPercent({ baseSlPercent, atrPercent, multiplier = 1.5, floorPercent = -50, ceilingPercent = -8, minAtrPercent = 4, maxAtrPercent = 30 }) {
+  const base = Number(baseSlPercent);
+  if (!Number.isFinite(base)) return -25;
+  if (!Number.isFinite(Number(atrPercent)) || Number(atrPercent) <= 0) {
+    return Math.max(floorPercent, Math.min(ceilingPercent, base));
+  }
+  const boundedAtr = Math.max(minAtrPercent, Math.min(maxAtrPercent, Number(atrPercent)));
+  const dynamic = -boundedAtr * multiplier;
+  return Math.max(floorPercent, Math.min(ceilingPercent, dynamic));
+}

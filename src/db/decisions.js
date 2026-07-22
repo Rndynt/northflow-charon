@@ -16,6 +16,29 @@ export function storeDecision(candidateId, candidate, decision) {
     json(decision.risks || []),
     json(decision),
   );
+  
+  // FIX #1: Cache WATCH/PASS decisions to prevent redundant LLM calls
+  if (decision.verdict === 'WATCH' || decision.verdict === 'PASS') {
+    const cacheTtlMs = decision.verdict === 'PASS' ? 60 * 60 * 1000 : 10 * 60 * 1000; // PASS=60min, WATCH=10min
+    const nowMs = now();
+    db.prepare(`
+      INSERT OR REPLACE INTO decision_cache 
+      (mint, verdict, confidence, reason, route, created_at_ms, expires_at_ms, mcap_snapshot, holders_snapshot, liq_snapshot)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      candidate.token.mint,
+      decision.verdict,
+      decision.confidence,
+      decision.reason || null,
+      candidate.signals?.route || null,
+      nowMs,
+      nowMs + cacheTtlMs,
+      candidate.metrics?.marketCapUsd || null,
+      candidate.metrics?.holderCount || null,
+      candidate.metrics?.liquidityUsd || null,
+    );
+  }
+  
   return Number(result.lastInsertRowid);
 }
 
@@ -48,6 +71,55 @@ export function batchById(batchId) {
     return row ? { ...row, candidate: safeJson(row.candidate_json, {}) } : null;
   }).filter(Boolean);
   return { ...batch, rows };
+}
+
+/**
+ * Check decision cache for a given mint. Returns cached decision if:
+ * 1. Cache entry exists and not expired
+ * 2. Market conditions haven't changed significantly (mcap <20%, holders <30%)
+ */
+export function checkDecisionCache(mint, currentMcap = null, currentHolders = null) {
+  const cached = db.prepare(`
+    SELECT * FROM decision_cache 
+    WHERE mint = ? AND expires_at_ms > ?
+    LIMIT 1
+  `).get(mint, now());
+  
+  if (!cached) return null;
+  
+  // Check if market conditions changed significantly
+  if (currentMcap && cached.mcap_snapshot) {
+    const mcapChange = Math.abs((currentMcap - cached.mcap_snapshot) / cached.mcap_snapshot);
+    if (mcapChange > 0.20) {
+      // Mcap changed >20% — invalidate cache
+      return null;
+    }
+  }
+  
+  if (currentHolders && cached.holders_snapshot) {
+    const holderChange = Math.abs((currentHolders - cached.holders_snapshot) / cached.holders_snapshot);
+    if (holderChange > 0.30) {
+      // Holders changed >30% — invalidate cache
+      return null;
+    }
+  }
+  
+  return {
+    verdict: cached.verdict,
+    confidence: cached.confidence,
+    reason: cached.reason,
+    route: cached.route,
+    cachedAt: cached.created_at_ms,
+    expiresAt: cached.expires_at_ms,
+  };
+}
+
+/**
+ * Prune expired cache entries (maintenance, can be called periodically)
+ */
+export function pruneExpiredCache() {
+  const result = db.prepare('DELETE FROM decision_cache WHERE expires_at_ms < ?').run(now());
+  return result.changes;
 }
 
 export function logDecisionEvent({

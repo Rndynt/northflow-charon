@@ -48,25 +48,39 @@ function appendParams(url, params = {}) {
   }
 }
 
-async function gmgnFetch(pathname, { params = {} } = {}) {
+async function gmgnFetch(pathname, { method = 'GET', params = {}, body = null } = {}) {
   if (!GMGN_ENABLED) throw new Error('GMGN disabled');
   return enqueueGmgn(async () => {
     const url = new URL(`https://openapi.gmgn.ai${pathname}`);
-    appendParams(url, {
-      ...params,
-      timestamp: Math.floor(now() / 1000),
-      client_id: randomUUID(),
-    });
+    appendParams(url, params);
     const maxRetries = Math.max(0, Math.floor(numSetting('gmgn_max_retries', 2)));
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       await paceGmgnRequest();
-      const res = await fetch(url, {
-        method: 'GET',
+      url.searchParams.set('timestamp', String(Math.floor(now() / 1000)));
+      url.searchParams.set('client_id', randomUUID());
+      const fetchOpts = {
+        method,
         headers: {
           'X-APIKEY': GMGN_API_KEY,
           'Content-Type': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
         },
-      });
+      };
+      if (body) fetchOpts.body = JSON.stringify(body);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      fetchOpts.signal = controller.signal;
+      let res;
+      try {
+        res = await fetch(url, fetchOpts);
+      } catch (err) {
+        if (err?.name === 'AbortError') {
+          throw new Error('gmgn fetch timeout 8000ms');
+        }
+        throw err;
+      } finally {
+        clearTimeout(timeoutId);
+      }
       const text = await res.text().catch(() => '');
       let payload = {};
       try {

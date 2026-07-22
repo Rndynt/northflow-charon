@@ -68,6 +68,12 @@ export function updateStrategyConfig(id, config) {
   }
 }
 
+export function slippageAdjustedMcap(mcap, side = 'entry') {
+  const pct = numSetting('dry_run_slippage_percent', 0);
+  if (pct <= 0 || !mcap) return mcap;
+  return side === 'entry' ? mcap * (1 + pct / 100) : mcap * (1 - pct / 100);
+}
+
 export function strategySetting(key, fallback) {
   const strat = activeStrategy();
   if (strat[key] !== undefined && strat[key] !== null) return strat[key];

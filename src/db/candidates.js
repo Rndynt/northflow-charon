@@ -3,10 +3,10 @@ import { now, safeJson, json } from '../utils.js';
 import { numSetting } from './settings.js';
 
 export function candidateSignalKey(candidate, signature = null) {
-  if (signature) return `${signature}:${candidate.token.mint}`;
   const route = candidate.signals?.route || 'signal';
   const bucket = Math.floor(Number(candidate.createdAtMs || now()) / (5 * 60 * 1000));
-  return `${route}:${candidate.token.mint}:${bucket}`;
+  const sigFragment = signature ? `:${signature.slice(0, 16)}` : '';
+  return `${route}:${candidate.token.mint}:${bucket}${sigFragment}`;
 }
 
 export function upsertCandidate(candidate, signature) {
@@ -74,13 +74,27 @@ export function latestCandidateByMint(mint) {
 export function recentEligibleCandidates(limit = 10) {
   const maxAgeMs = numSetting('llm_candidate_max_age_ms', 10 * 60 * 1000);
   const cutoff = now() - Math.max(30_000, maxAgeMs);
+  // Lesson #3: block unprofitable routes at query level — prevents blocked routes from drowning out profitable ones
+  // pumpfun_pregrad: pre-grad tokens still on bonding curve, can't reliably trade yet — keep for data only
+  const BLOCKED_ROUTES = ['dual_source', 'fee_graduated_trending', 'pumpfun_pregrad', 'graduated_trending'];
+  const blockedClause = BLOCKED_ROUTES.map(r => `signal_key NOT LIKE '${r}:%'`).join(' AND ');
   const rows = db.prepare(`
-    SELECT *
-    FROM candidates
-    WHERE status IN ('candidate', 'watch', 'buy', 'pass')
-      AND created_at_ms >= ?
-      AND id NOT IN (SELECT COALESCE(candidate_id, -1) FROM dry_run_positions WHERE status = 'open')
-    ORDER BY id DESC
+    SELECT c.*
+    FROM candidates c
+    INNER JOIN (
+      SELECT mint, MAX(id) as max_id
+      FROM candidates
+      WHERE status IN ('candidate', 'watch', 'buy', 'pass')
+        AND created_at_ms >= ?
+        AND id NOT IN (SELECT COALESCE(candidate_id, -1) FROM dry_run_positions WHERE status = 'open')
+        AND ${blockedClause}
+        AND (
+          json_extract(candidate_json, '$.filters.passed') IS NULL
+          OR json_extract(candidate_json, '$.filters.passed') = 1
+        )
+      GROUP BY mint
+    ) latest ON c.id = latest.max_id
+    ORDER BY c.id DESC
     LIMIT ?
   `).all(cutoff, limit);
   return rows.map(row => ({ ...row, candidate: safeJson(row.candidate_json, {}) })).reverse();

@@ -7,6 +7,9 @@ import { numSetting } from '../db/settings.js';
 import { candidateSummary, compactCandidateLine, batchRevealSummary, formatPosition } from './format.js';
 import { candidateButtons, batchRevealButtons, positionButtons, intentButtons } from './menus.js';
 import { batchById } from '../db/decisions.js';
+import { generateEntryCard } from '../visuals/entryCard.js';
+import { generateExitCard } from '../visuals/exitCard.js';
+import { writeFileSync, unlinkSync } from 'fs';
 
 export async function sendTelegram(text, extra = {}) {
   return bot.sendMessage(TELEGRAM_CHAT_ID, text, {
@@ -68,13 +71,53 @@ export async function sendBatch(chatId, batchId) {
 
 export async function sendPositionOpen(positionId) {
   const position = db.prepare('SELECT * FROM dry_run_positions WHERE id = ?').get(positionId);
-  const label = position?.execution_mode === 'live' ? 'Live buy executed' : 'Dry-run buy stored';
-  if (position) await sendTelegram(`✅ <b>${label}</b>\n\n${formatPosition(position)}`, positionButtons(positionId));
+  if (!position) return;
+  const label = position.execution_mode === 'live' ? 'Live buy executed' : 'Dry-run buy stored';
+  const text = `✅ <b>${label}</b>\n\n${formatPosition(position)}`;
+  let photoSent = false;
+  try {
+    const buffer = await generateEntryCard(position);
+    const tmpPath = `/tmp/charon_entry_${positionId}.png`;
+    writeFileSync(tmpPath, buffer);
+    await bot.sendPhoto(TELEGRAM_CHAT_ID, tmpPath, {
+      caption: text,
+      parse_mode: 'HTML',
+      disable_web_page_preview: true,
+      ...(TELEGRAM_TOPIC_ID ? { message_thread_id: Number(TELEGRAM_TOPIC_ID) } : {}),
+      ...(positionButtons(positionId)?.reply_markup ? { reply_markup: positionButtons(positionId).reply_markup } : {}),
+    });
+    photoSent = true;
+    try { unlinkSync(tmpPath); } catch (_) {}
+  } catch (err) {
+    if (!photoSent) {
+      console.log('[send] entry card failed:', err.message);
+      await sendTelegram(text, positionButtons(positionId));
+    }
+  }
 }
 
 export async function sendPositionExit(position) {
   const label = position?.execution_mode === 'live' ? 'Live exit' : 'Dry-run exit';
-  await sendTelegram(`🏁 <b>${label}: ${escapeHtml(position.exitReason)}</b>\n\n${formatPosition({ ...position, status: 'closed' })}`);
+  const text = `🏁 <b>${label}: ${escapeHtml(position.exitReason)}</b>\n\n${formatPosition({ ...position, status: 'closed' })}`;
+  let photoSent = false;
+  try {
+    const buffer = await generateExitCard(position);
+    const tmpPath = `/tmp/charon_exit_${position.id}.png`;
+    writeFileSync(tmpPath, buffer);
+    await bot.sendPhoto(TELEGRAM_CHAT_ID, tmpPath, {
+      caption: text,
+      parse_mode: 'HTML',
+      disable_web_page_preview: true,
+      ...(TELEGRAM_TOPIC_ID ? { message_thread_id: Number(TELEGRAM_TOPIC_ID) } : {}),
+    });
+    photoSent = true;
+    try { unlinkSync(tmpPath); } catch (_) {}
+  } catch (err) {
+    if (!photoSent) {
+      console.log('[send] exit card failed:', err.message);
+      await sendTelegram(text);
+    }
+  }
 }
 
 export async function sendTradeIntent(intentId, candidate, decision) {

@@ -23,9 +23,19 @@ export const SOLANA_WS_URL = process.env.SOLANA_WS_URL || `wss://mainnet.helius-
 export const JUPITER_SWAP_BASE_URL = process.env.JUPITER_SWAP_BASE_URL || 'https://api.jup.ag/swap/v2';
 export const JUPITER_SLIPPAGE_BPS = Number(process.env.JUPITER_SLIPPAGE_BPS || 300);
 export const LIVE_MIN_SOL_RESERVE_LAMPORTS = Math.floor(Number(process.env.LIVE_MIN_SOL_RESERVE || 0.02) * 1_000_000_000);
-export const LLM_BASE_URL = process.env.LLM_BASE_URL || 'https://api.minimax.io/v1';
+export const LLM_BASE_URL = process.env.LLM_BASE_URL || 'https://openrouter.ai/api/v1';
 export const LLM_API_KEY = process.env.LLM_API_KEY || '';
 export const LLM_MODEL = process.env.LLM_MODEL || 'MiniMax-M2.7';
+export const LLM_MODEL_CHEAP = process.env.LLM_MODEL_CHEAP || '';
+export const LLM_BASE_URL_CHEAP = process.env.LLM_BASE_URL_CHEAP || '';
+export const LLM_API_KEY_CHEAP = process.env.LLM_API_KEY_CHEAP || '';
+export const LLM_OPENROUTER_MODEL = process.env.LLM_OPENROUTER_MODEL || '';
+export const LLM_OPENROUTER_API_KEY = process.env.LLM_OPENROUTER_API_KEY || '';
+// Tertiary fallback: Zyloo (OpenAI-compatible gateway, catches any retryable error not just 402/401)
+// Docs: https://zyloo.io/docs — base URL https://zyloo.io/v1
+export const LLM_FALLBACK_BASE_URL = process.env.LLM_FALLBACK_BASE_URL || '';
+export const LLM_FALLBACK_API_KEY = process.env.LLM_FALLBACK_API_KEY || '';
+export const LLM_FALLBACK_MODEL = process.env.LLM_FALLBACK_MODEL || '';
 
 export const GRADUATED_POLL_MS = Number(process.env.GRADUATED_POLL_MS || 30_000);
 export const GRADUATED_LOOKBACK_MS = Number(process.env.GRADUATED_LOOKBACK_MS || 2 * 60 * 60 * 1000);
@@ -33,11 +43,21 @@ export const TRENDING_POLL_MS = Number(process.env.TRENDING_POLL_MS || 60_000);
 export const TRENDING_LOOKBACK_MS = Number(process.env.TRENDING_LOOKBACK_MS || 10 * 60 * 1000);
 export const GMGN_CACHE_TTL_MS = Number(process.env.GMGN_CACHE_TTL_MS || 5 * 60 * 1000);
 export const POSITION_CHECK_MS = Number(process.env.POSITION_CHECK_MS || 10_000);
-export const LLM_TIMEOUT_MS = Number(process.env.LLM_TIMEOUT_MS || 60_000);
+// Reduced from 60s — tokenrouter MiniMax-M3 normal response is 1-8s; 25s cap = hard upper bound on slow model hangs. LLM call was the biggest single delay in buy pipeline.
+export const LLM_TIMEOUT_MS = Number(process.env.LLM_TIMEOUT_MS || 25_000);
 export const ENABLE_LLM = process.env.ENABLE_LLM !== 'false';
-export const SIGNAL_SERVER_URL = process.env.SIGNAL_SERVER_URL || 'http://localhost:3456';
+export const SIGNAL_SERVER_URL = process.env.SIGNAL_SERVER_URL || '';
 export const SIGNAL_SERVER_KEY = process.env.SIGNAL_SERVER_KEY || '';
 export const SIGNAL_POLL_MS = Number(process.env.SIGNAL_POLL_MS || 30_000);
+export const PUMPPORTAL_API_KEY = process.env.PUMPPORTAL_API_KEY || '';
+export const PUMPPORTAL_ENABLED = process.env.PUMPPORTAL_ENABLED !== 'false';
+export const PREGRAD_POLL_MS = Number(process.env.PREGRAD_POLL_MS || 12_000);
+export const PREGRAD_LOOKBACK_MS = Number(process.env.PREGRAD_LOOKBACK_MS || 30 * 60 * 1000);
+export const PREGRAD_ENABLED = process.env.PREGRAD_ENABLED !== 'false';
+export const PREGRAD_MIN_RSSR_SOL = Number(process.env.PREGRAD_MIN_RSSR_SOL || 76.5);
+export const PREGRAD_MAX_RSSR_SOL = Number(process.env.PREGRAD_MAX_RSSR_SOL || 85);
+export const PREGRAD_MAX_AGE_MS = Number(process.env.PREGRAD_MAX_AGE_MS || 12 * 60 * 60 * 1000);
+export const PREGRAD_MAX_ATH_MULTIPLE = Number(process.env.PREGRAD_MAX_ATH_MULTIPLE || 1.2);
 
 export const JSON_HEADERS = {
   Accept: 'application/json, text/plain, */*',

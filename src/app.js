@@ -1,5 +1,5 @@
 import { setDefaultResultOrder } from 'node:dns';
-import { APP_NAME, SIGNAL_SERVER_URL, SIGNAL_POLL_MS, GRADUATED_POLL_MS, TRENDING_POLL_MS, POSITION_CHECK_MS, validateConfig } from './config.js';
+import { APP_NAME, SIGNAL_SERVER_URL, SIGNAL_POLL_MS, POSITION_CHECK_MS, PUMPPORTAL_API_KEY, PUMPPORTAL_ENABLED, PREGRAD_ENABLED, TRENDING_POLL_MS, validateConfig } from './config.js';
 import { initDb } from './db/connection.js';
 import { initLiveExecution } from './liveExecutor.js';
 import { setupTelegram } from './telegram/commands.js';
@@ -30,6 +30,14 @@ export async function startCharon() {
     await fetchServerSignals().catch(error => console.log(`[server] initial fetch failed: ${error.message}`));
     setInterval(() => trackServer(() => fetchServerSignals()), SIGNAL_POLL_MS);
 
+    // GMGN Trenches polling (runs alongside server signals)
+    const { fetchTrenches, setCandidateHandler: setTrenchesHandler } = await import('./signals/trenches.js');
+    setTrenchesHandler(processCandidateFromSignals);
+    const trackTrenches = makeFailureTracker('gmgn trenches', alert);
+    await fetchTrenches().catch(error => console.log(`[trenches] initial fetch failed: ${error.message}`));
+    // Reduced from 30s to 60s — pump.fun direct source is faster and more reliable
+    setInterval(() => trackTrenches(() => fetchTrenches()), 60_000);
+
     // Price monitor for dip buy strategy
     const { monitorPriceAlerts, cleanupAlerts } = await import('./signals/priceMonitor.js');
     const { setCandidateHandler: setAlertHandler } = await import('./signals/priceMonitor.js');
@@ -39,25 +47,55 @@ export async function startCharon() {
 
     console.log(`[bot] ${APP_NAME} started (server mode: ${SIGNAL_SERVER_URL})`);
   } else {
-    // ── Standalone mode: direct polling (legacy) ───────────────────────────
-    const { fetchGraduatedCoins } = await import('./signals/graduated.js');
-    const { fetchGmgnTrending, setDegenHandler } = await import('./signals/trending.js');
-    const { startWebsocket, setCandidateHandler } = await import('./signals/feeClaim.js');
+    // ── Trenches-only mode: direct polling of GMGN trenches ─────────────────
+    const { fetchTrenches, setCandidateHandler } = await import('./signals/trenches.js');
 
-    setDegenHandler(maybeProcessDegenCandidate);
     setCandidateHandler(processCandidateFromSignals);
 
-    await fetchGraduatedCoins().catch(error => console.log(`[graduated] initial fetch failed: ${error.message}`));
-    await fetchGmgnTrending().catch(error => console.log(`[trending] initial fetch failed: ${error.message}`));
+    await fetchTrenches().catch(error => console.log(`[trenches] initial fetch failed: ${error.message}`));
+    // Reduced from 30s to 60s — pump.fun direct source is faster and more reliable
+    setInterval(() => fetchTrenches().catch(error => console.log(`[trenches] ${error.message}`)), 60_000);
 
-    setInterval(() => fetchGraduatedCoins().catch(error => console.log(`[graduated] ${error.message}`)), GRADUATED_POLL_MS);
-    setInterval(() => fetchGmgnTrending().catch(error => console.log(`[trending] ${error.message}`)), TRENDING_POLL_MS);
-    startWebsocket();
+    console.log(`[bot] ${APP_NAME} started (trenches-only mode)`);
+  }
 
-    console.log(`[bot] ${APP_NAME} started (standalone mode)`);
+  // Graduation polling — runs in both modes (GMGN /v1/token/info based detection)
+  const { startGraduationPolling, fetchGraduatedCoins } = await import('./signals/graduated.js');
+  const trackGraduation = makeFailureTracker('graduation poll', (msg) => sendTelegram(msg));
+  fetchGraduatedCoins().catch(err => console.log(`[graduated] initial fetch failed: ${err.message}`));
+  setInterval(() => trackGraduation(() => fetchGraduatedCoins()), 60_000);
+  startGraduationPolling();
+
+  // Trending polling — runs in both modes
+  const { fetchGmgnTrending, setTrendingCandidateHandler } = await import('./signals/trending.js');
+  setTrendingCandidateHandler(processCandidateFromSignals);
+  const trackTrending = makeFailureTracker('trending poll', (msg) => sendTelegram(msg));
+  fetchGmgnTrending().catch(err => console.log(`[trending] initial fetch failed: ${err.message}`));
+  setInterval(() => trackTrending(() => fetchGmgnTrending()), TRENDING_POLL_MS);
+
+  if (PREGRAD_ENABLED) {
+    const { startPumpfunPregrad, setCandidateHandler: setPregradHandler } = await import('./signals/pumpfunPregrad.js');
+    setPregradHandler(processCandidateFromSignals);
+    const trackPregrad = makeFailureTracker('pumpfun pregrad', (msg) => sendTelegram(msg));
+    startPumpfunPregrad(trackPregrad);
+  }
+
+  if (PUMPPORTAL_API_KEY && PUMPPORTAL_ENABLED) {
+    const { startPumpportal, setCandidateHandler: setPumpportalHandler } = await import('./signals/pumpportal.js');
+    setPumpportalHandler(processCandidateFromSignals);
+    startPumpportal();
   }
 
   // Position monitoring runs in both modes
   const trackPositions = makeFailureTracker('position monitor', (msg) => sendTelegram(msg));
-  setInterval(() => trackPositions(() => monitorPositions()), POSITION_CHECK_MS);
+  let positionMonitorRunning = false;
+  setInterval(async () => {
+    if (positionMonitorRunning) return;
+    positionMonitorRunning = true;
+    try {
+      await trackPositions(() => monitorPositions());
+    } finally {
+      positionMonitorRunning = false;
+    }
+  }, POSITION_CHECK_MS);
 }
