@@ -1,4 +1,4 @@
-# Charon
+# Kaiser.Charon
 
 This is my working fork of [Charon](https://github.com/yunus-0x/charon) by [@yunus-0x](https://github.com/yunus-0x). All credit for the original idea and codebase goes to him — I just kept changing things while running it, and at some point the diff got big enough that it needed its own home.
 
