@@ -3,7 +3,7 @@ import { numSetting, boolSetting, strategyById, slippageAdjustedMcap } from '../
 import { db } from '../db/connection.js';
 import { firstPositiveNumber, marketCapFromGmgn, tokenPriceFromGmgn, computeAtrPercent, dynamicStopLossPercent } from '../utils.js';
 import { fetchGmgnTokenInfo } from '../enrichment/gmgn.js';
-import { fetchJupiterAsset, fetchJupiterHolders, fetchJupiterChartContext, fetchJupiterWalletPnl } from '../enrichment/jupiter.js';
+import { fetchJupiterAsset, fetchJupiterHolders, fetchJupiterChartContext, fetchJupiterWalletPnl, fetchTokenSpotViaQuote } from '../enrichment/jupiter.js';
 import { liveWalletPubkey } from '../liveExecutor.js';
 import { fetchSavedWalletExposure } from '../enrichment/wallets.js';
 import { filterCandidate } from '../pipeline/candidateBuilder.js';
@@ -126,12 +126,22 @@ const sellInProgress = new Set();
 
 export async function refreshPosition(position, { autoExit = true, jupiterPnl = null } = {}) {
   // Bug2 fix (2026-06-19): bypass 20s cache for live monitoring — flash crash detection requires fresh data
-  const asset = await fetchJupiterAsset(position.mint, { useCache: false, ttlMs: 3000 });
+  // Quote-first (2026-07-24): dry_run exit decisions use executable Jupiter quote (live pool
+  // reserves) as primary price — datapi mark is stale by design. Mark = fallback on 429/backoff.
+  const useQuote = position.execution_mode !== 'live' && numSetting('exit_quote_enabled', 1);
+  const [asset, qp] = await Promise.all([
+    fetchJupiterAsset(position.mint, { useCache: false, ttlMs: 3000 }),
+    useQuote ? fetchTokenSpotViaQuote(position.mint) : Promise.resolve(null),
+  ]);
+  const quotePrice = (Number.isFinite(qp) && qp > 0) ? qp : null;
+  const quoteMcap = quotePrice && Number(position.entry_price) > 0
+    ? Number(position.entry_mcap) * (quotePrice / Number(position.entry_price))
+    : null;
   const jupiterPrice = Number(asset?.usdPrice);
   const jupiterMcap = firstPositiveNumber(asset?.mcap, asset?.fdv);
   // Guard 1 DISABLED (2026-07-17): can't distinguish crash vs stale data — single source (Jupiter) is unreliable
-  const price = firstPositiveNumber(jupiterPrice || null, position.high_water_price, position.entry_price);
-  const mcap = firstPositiveNumber(jupiterMcap, position.high_water_mcap, position.entry_mcap);
+  const price = firstPositiveNumber(quotePrice, jupiterPrice || null, position.high_water_price, position.entry_price);
+  const mcap = firstPositiveNumber(quoteMcap, jupiterMcap, position.high_water_mcap, position.entry_mcap);
   if (!Number.isFinite(Number(mcap)) || !Number.isFinite(Number(position.entry_mcap)) || Number(position.entry_mcap) <= 0) {
     return null;
   }
@@ -139,6 +149,7 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
   const highWaterMcap = Math.max(Number(position.high_water_mcap || 0), Number(mcap));
   const highWaterPrice = Math.max(Number(position.high_water_price || 0), Number(price || 0));
   let pnlPercent = (Number(mcap) / Number(position.entry_mcap) - 1) * 100;
+  const markPnlPercent = pnlPercent;
   let pnlSol = Number(position.size_sol) * pnlPercent / 100;
   if (jupiterPnl && Number.isFinite(Number(jupiterPnl.totalPnlPercentageNative))) {
     pnlPercent = Number(jupiterPnl.totalPnlPercentageNative);
@@ -238,6 +249,7 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
     else if (trailingHit) exitReason = 'TRAILING_TP';
   }
 
+
   // Live exits will override these with realized SOL values
   let finalPnlPercent = pnlPercent;
   let finalPnlSol = pnlSol;
@@ -276,18 +288,20 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
     closed = true;
   } else if (exitReason && autoExit) {
     // Apply exit slippage for dry_run PnL
-    const exitMcap = slippageAdjustedMcap(mcap, 'exit');
+    const exitMcap = slippageAdjustedMcap(quotePrice ? Number(position.entry_mcap) * (quotePrice / Number(position.entry_price)) : mcap, 'exit');
+    const dryExitPrice = quotePrice || price;
+    const dryExitMcap = quotePrice ? Number(position.entry_mcap) * (quotePrice / Number(position.entry_price)) : mcap;
     const dryPnlPercent = (Number(exitMcap) / Number(position.entry_mcap) - 1) * 100;
     const dryPnlSol = Number(position.size_sol) * dryPnlPercent / 100;
     db.prepare(`
       UPDATE dry_run_positions
       SET status = 'closed', closed_at_ms = ?, exit_price = ?, exit_mcap = ?, exit_reason = ?, pnl_percent = ?, pnl_sol = ?
       WHERE id = ?
-    `).run(now(), price, exitMcap, exitReason, dryPnlPercent, dryPnlSol, position.id);
+    `).run(now(), dryExitPrice, dryExitMcap, exitReason, dryPnlPercent, dryPnlSol, position.id);
     db.prepare(`
       INSERT INTO dry_run_trades (position_id, mint, side, at_ms, price, mcap, size_sol, token_amount_est, reason, payload_json)
       VALUES (?, ?, 'sell', ?, ?, ?, ?, ?, ?, ?)
-    `).run(position.id, position.mint, now(), price, exitMcap, position.size_sol, position.token_amount_est, exitReason, json({ pnlPercent: dryPnlPercent, pnlSol: dryPnlSol, effectiveSlPercent, atrPercent, baseSlPercent: Number(position.sl_percent), slippage_pct: numSetting('dry_run_slippage_percent', 0) }));
+    `).run(position.id, position.mint, now(), dryExitPrice, dryExitMcap, position.size_sol, position.token_amount_est, exitReason, json({ pnlPercent: dryPnlPercent, pnlSol: dryPnlSol, effectiveSlPercent, atrPercent, baseSlPercent: Number(position.sl_percent), slippage_pct: numSetting('dry_run_slippage_percent', 0) }));
     finalPnlPercent = dryPnlPercent;
     finalPnlSol = dryPnlSol;
     closed = true;

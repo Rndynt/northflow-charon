@@ -17,6 +17,22 @@ function setJupiterAssetBackoff(err) {
   console.log(`[asset] backing off until ${new Date(jupiterAssetBackoffUntil).toISOString()} (429)`);
 }
 
+let quoteBackoffUntil = 0;
+
+function quoteBackoffActive() {
+  return now() < quoteBackoffUntil;
+}
+
+function setQuoteBackoff(err) {
+  if (err.response?.status !== 429) return;
+  const resetHeader = Number(err.response?.headers?.['x-ratelimit-reset'] || 0);
+  const resetMs = resetHeader > 1_000_000_000_000 ? resetHeader : resetHeader * 1000;
+  quoteBackoffUntil = resetMs > now() ? resetMs : now() + 30_000;
+  console.log(`[quote] backing off until ${new Date(quoteBackoffUntil).toISOString()} (429)`);
+}
+
+let solUsdCache = { price: null, at: 0 };
+
 function jupiterStatsForInterval(row, interval) {
   const key = `stats${interval}`;
   return row?.[key] || row?.stats5m || row?.stats1h || row?.stats24h || {};
@@ -206,6 +222,39 @@ const IGNORED_PNL_MINTS = new Set([
   'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
 ]);
 
+async function fetchSolUsdPriceCached() {
+  if (solUsdCache.price != null && now() - solUsdCache.at < 60_000) return solUsdCache.price;
+  const price = await fetchSolUsdPrice();
+  solUsdCache = { price, at: now() };
+  return price;
+}
+
+// Fixed 1000-token reference amount ignores price impact for large sizes —
+// upgrade to position-sized quotes when size_sol > 1.
+async function fetchTokenSpotViaQuote(mint) {
+  if (quoteBackoffActive()) return null;
+  try {
+    const url = new URL('https://lite-api.jup.ag/swap/v1/quote');
+    url.searchParams.set('inputMint', mint);
+    url.searchParams.set('outputMint', WSOL_MINT);
+    url.searchParams.set('amount', '1000000000');
+    url.searchParams.set('slippageBps', '100');
+    const [solUsd, quoteRes] = await Promise.all([
+      fetchSolUsdPriceCached(),
+      axios.get(url.toString(), { timeout: 10_000, headers: JSON_HEADERS }),
+    ]);
+    const outAmount = quoteRes.data?.outAmount;
+    if (!outAmount) return null;
+    const outSol = Number(outAmount) / 1e9;
+    if (!Number.isFinite(solUsd) || solUsd <= 0) return null;
+    return (outSol / 1000) * solUsd;
+  } catch (err) {
+    setQuoteBackoff(err);
+    if (err.response?.status !== 429) console.log(`[quote] ${mint.slice(0, 8)}... ${err.response?.status || ''} ${err.message}`);
+    return null;
+  }
+}
+
 async function fetchJupiterWalletPnl(walletAddress) {
   try {
     const url = new URL('https://datapi.jup.ag/v1/pnl');
@@ -232,6 +281,7 @@ export {
   fetchJupiterChartWindow,
   fetchJupiterChartContext,
   fetchJupiterWalletPnl,
+  fetchTokenSpotViaQuote,
   jupiterAssetBackoffActive,
   setJupiterAssetBackoff,
 };
