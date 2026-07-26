@@ -184,7 +184,22 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
   const armHit = pnlPercent >= armThreshold;
   const trailingArmed = position.trailing_armed || (position.trailing_enabled && armHit);
   const trailDrop = highWaterMcap > 0 ? (Number(mcap) / highWaterMcap - 1) * 100 : 0;
-  const trailingHit = trailingArmed && position.trailing_enabled && pnlPercent > 0 && trailDrop <= -Math.abs(Number(position.trailing_percent));
+  // EXIT-FIX 2026-07-25 (backtest 933 trades 07-22..25: base +1,685% -> +8,766% ideal / +6,314% gap).
+  // (1) TIGHT TRAIL: once peak pnl >= trailing_tight_from_percent (40), trail tightens from
+  //     trailing_percent (10) to trailing_tight_percent (5). Rescues armed winners that round-trip
+  //     to SL (97 armed+SL trades = -6,497% pnl in window).
+  // (2) FLOOR: once armed, trailing may not exit below trailing_floor_percent (+8). Kills the
+  //     +1.7% "gap-dump between 3s ticks" exits (dump lands below arm before next check).
+  // Partial@arm REJECTED by backtest (-867%): caps the runners that carry total profit.
+  const peakPnl = Number(position.entry_mcap) > 0
+    ? (highWaterMcap / Number(position.entry_mcap) - 1) * 100
+    : pnlPercent;
+  const tightFrom = numSetting('trailing_tight_from_percent', 40);
+  const effectiveTrailPct = peakPnl >= tightFrom
+    ? numSetting('trailing_tight_percent', 5)
+    : Math.abs(Number(position.trailing_percent));
+  const trailingFloor = numSetting('trailing_floor_percent', 8);
+  const trailingHit = trailingArmed && position.trailing_enabled && pnlPercent >= trailingFloor && trailDrop <= -effectiveTrailPct;
   let exitReason = null;
   let closed = false;
 
