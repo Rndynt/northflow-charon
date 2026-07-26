@@ -21,7 +21,10 @@ Everything from the original still applies: signal server, strategies (`sniper`,
 
 ## Requirements
 
-- **Node.js 20+** (developed on v22). `better-sqlite3` compiles a native module, so you need build tools: `build-essential` + `python3` on Debian/Ubuntu, Xcode CLT on macOS.
+- **Node.js 20+** (developed on v22).
+- **Native build tools** — `better-sqlite3` and `canvas` compile from source:
+  - Debian/Ubuntu: `sudo apt install -y build-essential python3 pkg-config libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev`
+  - macOS: `xcode-select --install` and `brew install pkg-config cairo pango libpng jpeg giflib librsvg`
 - A **Telegram bot token** and your chat ID.
 - A **signal server key** — see the [original repo](https://github.com/yunus-0x/charon) for access.
 - A **Helius RPC endpoint** (free tier is fine for `dry_run`).
@@ -42,7 +45,7 @@ npm start
 
 The SQLite database is created automatically at `DB_PATH` on first run. Nothing else to provision.
 
-If `npm install` fails on `better-sqlite3`, it's the native build — install the build tools listed above and retry.
+If `npm install` fails on `better-sqlite3` or `canvas`, it's the native build — install the build tools listed above and retry.
 
 ## Configuration
 
