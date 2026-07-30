@@ -19,6 +19,18 @@ Charon is a Telegram bot that screens Solana pump.fun tokens, runs them through 
 
 Everything from the original still applies: signal server, strategies (`sniper`, `dip_buy`, `smart_money`, `degen`), hot-reloaded config in SQLite, Telegram menus, the works.
 
+## Latest additions (post-07-2026)
+
+This fork now includes:
+
+- **LLM Decision Cache** (`migrations/001_decision_cache.sql`) — WATCH/PASS verdicts cached 10min/60min to cut redundant LLM calls by ~60-70%. Invalidates on >20% mcap or >30% holder change.
+- **ML Momentum Filter** (`src/pipeline/predict_momentum.py`) — Python subprocess scoring candidates 0.0-1.0 using a trained model (`models/momentum_model.pkl`). Optional; skips silently if model absent.
+- **Hybrid Filter Strategy** (`OPTION_C_IMPLEMENTATION.md`) — bot holders ≥25% → HARD REJECT; holder deadzone [100,400] + dev migrations ≥20 → 50% size cut. Expected +20 SOL uplift based on 30-day backtest.
+- **Tier 1 Universal Filters** (`TIER1_FILTERS.md`) — 3 data-driven filters from 634-trade backtest with bucketed evidence.
+- **Code Audit** (`AUDIT_OPUS_2026-07-07.md`) — Claude Opus 4.8 static audit: 3 CRITICAL findings including C1 (Jupiter slippage cap never sent) and C2 (post-swap dedup → orphaned tokens).
+- **Backtest Edge Analysis** (`BACKTEST_EDGE_2026-07-07.md`) — 1,146-position split-half backtest showing regime decay: 40.3% WR (+5.1 SOL) → 25.7% WR (-3.9 SOL).
+- **Bug Fixes** (`BUGFIX_SUMMARY.md`) — 4 LLM-layer fixes: cache, pre-filter guard, execution failure logging, past-win audit trail.
+
 ## Requirements
 
 - **Node.js 20+** (developed on v22).
