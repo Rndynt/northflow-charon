@@ -11,37 +11,60 @@ export function candidateSignalKey(candidate, signature = null) {
 
 export function upsertCandidate(candidate, signature) {
   const signalKey = candidateSignalKey(candidate, signature);
+  const mint = candidate.token.mint;
+  const status = candidate.filters.passed ? 'candidate' : 'filtered';
+  const candidateJson = json(candidate);
+  const filterJson = json(candidate.filters);
+
+  // The candidates table enforces UNIQUE(signature, mint), but signal_key is a
+  // *different* dedup key (route:mint:5min-bucket). The same underlying token
+  // event is often picked up by more than one signal source (e.g. trenches +
+  // graduated + trending) with different routes, producing different signal_keys
+  // for the same (signature, mint) pair. Checking signal_key alone let two such
+  // calls both fall into the INSERT branch, and the second violated the DB's
+  // UNIQUE(signature, mint) constraint. Check both keys before deciding.
+  const findExisting = () => {
+    const bySignalKey = db.prepare('SELECT id FROM candidates WHERE signal_key = ?').get(signalKey);
+    if (bySignalKey) return bySignalKey;
+    if (signature) {
+      return db.prepare('SELECT id FROM candidates WHERE signature = ? AND mint = ?').get(signature, mint);
+    }
+    return null;
+  };
+
   return db.transaction(() => {
-    const existing = db.prepare('SELECT id FROM candidates WHERE signal_key = ?').get(signalKey);
+    const existing = findExisting();
     if (existing) {
       db.prepare(`
         UPDATE candidates
         SET status = ?, updated_at_ms = ?, candidate_json = ?, filter_result_json = ?
         WHERE id = ?
-      `).run(
-        candidate.filters.passed ? 'candidate' : 'filtered',
-        now(),
-        json(candidate),
-        json(candidate.filters),
-        existing.id,
-      );
+      `).run(status, now(), candidateJson, filterJson, existing.id);
       return existing.id;
     }
 
-    const result = db.prepare(`
-      INSERT INTO candidates (mint, status, created_at_ms, updated_at_ms, signature, signal_key, candidate_json, filter_result_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      candidate.token.mint,
-      candidate.filters.passed ? 'candidate' : 'filtered',
-      now(),
-      now(),
-      signature,
-      signalKey,
-      json(candidate),
-      json(candidate.filters),
-    );
-    return Number(result.lastInsertRowid);
+    try {
+      const result = db.prepare(`
+        INSERT INTO candidates (mint, status, created_at_ms, updated_at_ms, signature, signal_key, candidate_json, filter_result_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(mint, status, now(), now(), signature, signalKey, candidateJson, filterJson);
+      return Number(result.lastInsertRowid);
+    } catch (err) {
+      // Defensive fallback in case of a UNIQUE(signature, mint) collision we
+      // didn't catch above — update the existing row instead of crashing.
+      if (signature && String(err.code || '').startsWith('SQLITE_CONSTRAINT')) {
+        const raceRow = db.prepare('SELECT id FROM candidates WHERE signature = ? AND mint = ?').get(signature, mint);
+        if (raceRow) {
+          db.prepare(`
+            UPDATE candidates
+            SET status = ?, updated_at_ms = ?, candidate_json = ?, filter_result_json = ?
+            WHERE id = ?
+          `).run(status, now(), candidateJson, filterJson, raceRow.id);
+          return raceRow.id;
+        }
+      }
+      throw err;
+    }
   })();
 }
 
