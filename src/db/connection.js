@@ -191,6 +191,18 @@ export function initDb() {
       triggered_at_ms INTEGER,
       expires_at_ms INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS decision_cache (
+      mint TEXT PRIMARY KEY,
+      verdict TEXT NOT NULL,
+      confidence REAL NOT NULL,
+      reason TEXT,
+      route TEXT,
+      created_at_ms INTEGER NOT NULL,
+      expires_at_ms INTEGER NOT NULL,
+      mcap_snapshot REAL,
+      holders_snapshot INTEGER,
+      liq_snapshot REAL
+    );
     CREATE INDEX IF NOT EXISTS idx_alerts_status ON price_alerts(status, expires_at_ms);
     CREATE INDEX IF NOT EXISTS idx_candidates_mint ON candidates(mint);
     CREATE INDEX IF NOT EXISTS idx_positions_status ON dry_run_positions(status);
@@ -199,6 +211,8 @@ export function initDb() {
     CREATE INDEX IF NOT EXISTS idx_decision_logs_mint ON decision_logs(selected_mint);
     CREATE INDEX IF NOT EXISTS idx_signal_events_mint ON signal_events(mint);
     CREATE INDEX IF NOT EXISTS idx_learning_lessons_status ON learning_lessons(status, created_at_ms);
+    CREATE INDEX IF NOT EXISTS idx_decision_cache_expires ON decision_cache(expires_at_ms);
+    CREATE INDEX IF NOT EXISTS idx_decision_cache_mint_expires ON decision_cache(mint, expires_at_ms);
   `);
   ensureColumn('candidates', 'signal_key', 'TEXT');
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_candidates_signal_key ON candidates(signal_key) WHERE signal_key IS NOT NULL');
