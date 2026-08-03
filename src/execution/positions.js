@@ -351,14 +351,16 @@ export async function monitorPositions() {
   if (pubkey && positions.some(p => p.execution_mode === 'live')) {
     walletPnlData = await fetchJupiterWalletPnl(pubkey);
   }
-  for (const position of positions) {
+  const results = await Promise.all(positions.map((position) => {
     const jupiterPnl = position.execution_mode === 'live'
       ? (walletPnlData[position.mint]?.pnl || null)
       : null;
-    const result = await refreshPosition(position, { autoExit: true, jupiterPnl }).catch((err) => {
+    return refreshPosition(position, { autoExit: true, jupiterPnl }).catch((err) => {
       console.log(`[position] ${position.id} ${err.message}`);
       return null;
     });
+  }));
+  for (const result of results) {
     if (result?.exitReason) await sendPositionExit(result);
   }
 }
