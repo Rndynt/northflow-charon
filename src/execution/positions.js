@@ -271,9 +271,11 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
 
   db.prepare(`
     UPDATE dry_run_positions
-    SET high_water_mcap = ?, high_water_price = ?, trailing_armed = ?
-    WHERE id = ?
-  `).run(highWaterMcap, highWaterPrice, trailingArmed ? 1 : 0, position.id);
+    SET high_water_mcap = ?, high_water_price = ?, trailing_armed = ?,
+        current_mcap = ?, current_price = ?, last_checked_at_ms = ?,
+        pnl_percent = ?, pnl_sol = ?
+    WHERE id = ? AND status = 'open'
+  `).run(highWaterMcap, highWaterPrice, trailingArmed ? 1 : 0, mcap, price, now(), pnlPercent, pnlSol, position.id);
 
   if (exitReason && autoExit && position.execution_mode === 'live') {
     if (sellInProgress.has(position.id)) return { ...position, exitReason: null };
