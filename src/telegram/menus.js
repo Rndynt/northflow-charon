@@ -3,7 +3,7 @@ import { numSetting, boolSetting, setting, activeStrategy, allStrategies } from 
 import { openPositionCount, tradingMode, allPositions } from '../db/positions.js';
 import { savedWallets } from '../enrichment/wallets.js';
 import { gmgnStatusText } from '../enrichment/gmgn.js';
-import { formatPosition } from './format.js';
+import { positionsListText } from './format.js';
 import { ENABLE_LLM, LLM_API_KEY } from '../config.js';
 
 export function menuKeyboard() {
@@ -186,8 +186,7 @@ export function walletsText() {
 
 export function positionsText() {
   const rows = allPositions(12);
-  const text = rows.length ? rows.map(formatPosition).join('\n\n') : 'No dry-run positions yet.';
-  return `📍 <b>Positions</b>\n\n${text}`;
+  return positionsListText(rows);
 }
 
 export function strategyMenuText() {

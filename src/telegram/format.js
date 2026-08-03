@@ -122,6 +122,26 @@ export function formatPosition(position) {
   ].filter(Boolean).join('\n');
 }
 
+export function positionsListText(rows) {
+  if (!rows.length) return '📍 <b>Positions</b>\n\nNo dry-run positions yet.';
+  const open = rows.filter((row) => row.status === 'open');
+  const closed = rows.filter((row) => row.status !== 'open');
+  const divider = '━━━━━━━━━━━━━━━━━━━━';
+  return [
+    '📍 <b>Positions</b>',
+    '',
+    `🟢 <b>Open (${open.length})</b>`,
+    '',
+    open.length ? open.map(formatPosition).join('\n\n') : 'No open positions.',
+    '',
+    divider,
+    '',
+    `🔴 <b>Closed (${closed.length})</b>`,
+    '',
+    closed.length ? closed.map(formatPosition).join('\n\n') : 'No closed positions.',
+  ].join('\n');
+}
+
 export function compactDecisionCandidate(row) {
   if (!row) return null;
   const c = row.candidate;
