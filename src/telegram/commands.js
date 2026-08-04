@@ -5,6 +5,7 @@ import { escapeHtml, fmtPct } from '../format.js';
 import { db } from '../db/connection.js';
 import { numSetting, boolSetting, setSetting, activeStrategy, setActiveStrategy, strategyById, updateStrategyConfig } from '../db/settings.js';
 import { candidateById, latestCandidateByMint, updateCandidateStatus } from '../db/candidates.js';
+import { allPositions } from '../db/positions.js';
 import { storeDecision, logDecisionEvent } from '../db/decisions.js';
 import {
   menuKeyboard,
@@ -296,10 +297,6 @@ async function sendPnl(chatId, query = null) {
 function parseSetFilter(text) {
   const parts = text.trim().split(/\s+/);
   return { key: parts[1], value: parts[2] };
-}
-
-function allPositions(limit = 10) {
-  return db.prepare('SELECT * FROM dry_run_positions ORDER BY id DESC LIMIT ?').all(limit);
 }
 
 function savedWallets() {

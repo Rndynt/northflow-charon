@@ -29,8 +29,15 @@ export function tradingMode() {
   return ['dry_run', 'confirm', 'live'].includes(mode) ? mode : 'dry_run';
 }
 
-export function allPositions(limit = 10) {
-  return db.prepare('SELECT * FROM dry_run_positions ORDER BY id DESC LIMIT ?').all(limit);
+export function allPositions(closedLimit = 10) {
+  // Previously: `ORDER BY id DESC LIMIT ?` on the whole table. Once more than
+  // `closedLimit` trades had happened since a position opened, that position's
+  // row fell outside the window and silently vanished from every menu/command
+  // that calls this — even though it was still genuinely open. Open positions
+  // are unbounded (there are only ever a handful) and closed ones are capped.
+  const open = db.prepare('SELECT * FROM dry_run_positions WHERE status = ? ORDER BY opened_at_ms DESC').all('open');
+  const closed = db.prepare('SELECT * FROM dry_run_positions WHERE status != ? ORDER BY id DESC LIMIT ?').all('open', closedLimit);
+  return [...open, ...closed];
 }
 
 export function createDryRunPosition(candidateId, candidate, decision, reason = 'llm_buy') {
