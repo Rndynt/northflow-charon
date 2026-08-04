@@ -23,7 +23,7 @@ import {
   strategyKeyboard,
 } from './menus.js';
 import { sendTelegram, sendBatch, sendPositionOpen } from './send.js';
-import { candidateSummary, formatPosition, positionsListText } from './format.js';
+import { candidateSummary, formatPosition, positionsListText, positionsListChunks } from './format.js';
 import { refreshPosition } from '../execution/positions.js';
 import { executeLiveSell } from '../execution/router.js';
 import { handleCallback, editMenuMessage } from './callbacks.js';
@@ -159,8 +159,10 @@ export async function sendCandidate(chatId, id) {
 
 export async function sendPositions(chatId) {
   const rows = allPositions(12);
-  const text = positionsListText(rows);
-  await bot.sendMessage(chatId, text, { parse_mode: 'HTML', disable_web_page_preview: true });
+  const chunks = positionsListChunks(rows);
+  for (const chunk of chunks) {
+    await bot.sendMessage(chatId, chunk, { parse_mode: 'HTML', disable_web_page_preview: true });
+  }
 }
 
 export async function sendPosition(chatId, id, query = null) {

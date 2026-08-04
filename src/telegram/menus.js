@@ -185,8 +185,13 @@ export function walletsText() {
 }
 
 export function positionsText() {
-  const rows = allPositions(12);
-  return positionsListText(rows);
+  // This feeds an inline-menu edit (single message, can't be chunked like /positions
+  // can), so keep it short and hard-cap it as a safety net against ETELEGRAM
+  // 400 "message is too long".
+  const rows = allPositions(5);
+  const text = positionsListText(rows);
+  if (text.length <= 3800) return text;
+  return `${text.slice(0, 3800)}\n\n… truncated, use /positions for the full list.`;
 }
 
 export function strategyMenuText() {

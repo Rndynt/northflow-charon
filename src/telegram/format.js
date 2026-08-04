@@ -122,6 +122,38 @@ export function formatPosition(position) {
   ].filter(Boolean).join('\n');
 }
 
+// Telegram's hard limit is 4096 chars/message. Stay well under it since our
+// text has HTML entities/tags that don't visually count but do count for the API.
+const TELEGRAM_SAFE_CHUNK = 3500;
+
+export function positionsListChunks(rows, limit = TELEGRAM_SAFE_CHUNK) {
+  if (!rows.length) return ['📍 <b>Positions</b>\n\nNo dry-run positions yet.'];
+  const open = rows.filter((row) => row.status === 'open');
+  const closed = rows.filter((row) => row.status !== 'open');
+  const divider = '━━━━━━━━━━━━━━━━━━━━';
+
+  // Build independent blocks first, then greedily pack them into chunks so a
+  // single position is never split mid-message.
+  const blocks = [`📍 <b>Positions</b>\n\n🟢 <b>Open (${open.length})</b>`];
+  blocks.push(...(open.length ? open.map(formatPosition) : ['No open positions.']));
+  blocks.push(`${divider}\n\n🔴 <b>Closed (${closed.length})</b>`);
+  blocks.push(...(closed.length ? closed.map(formatPosition) : ['No closed positions.']));
+
+  const chunks = [];
+  let current = '';
+  for (const block of blocks) {
+    const candidate = current ? `${current}\n\n${block}` : block;
+    if (candidate.length > limit && current) {
+      chunks.push(current);
+      current = block;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
 export function positionsListText(rows) {
   if (!rows.length) return '📍 <b>Positions</b>\n\nNo dry-run positions yet.';
   const open = rows.filter((row) => row.status === 'open');
