@@ -41,12 +41,12 @@ export async function handleMessage(msg) {
   if (text.startsWith('/positions')) return sendPositions(chatId);
   if (text.startsWith('/position')) {
     const id = Number(text.split(/\s+/)[1]);
-    if (!id) return bot.sendMessage(chatId, 'Usage: /position <id>\\n\\nID ada di baris "#<id>" pada /positions.');
+    if (!id) return bot.sendMessage(chatId, 'Usage: /position <id>\nID ada di baris "#<id>" pada /positions.');
     return sendPosition(chatId, id);
   }
   if (text.startsWith('/close')) {
     const id = Number(text.split(/\s+/)[1]);
-    if (!id) return bot.sendMessage(chatId, 'Usage: /close <id>\\n\\nID ada di baris "#<id>" pada /positions.');
+    if (!id) return bot.sendMessage(chatId, 'Usage: /close <id>\nID ada di baris "#<id>" pada /positions.');
     return closePosition(chatId, id, 'MANUAL');
   }
   if (text.startsWith('/filters')) return bot.sendMessage(chatId, filtersText(), { parse_mode: 'HTML' });
