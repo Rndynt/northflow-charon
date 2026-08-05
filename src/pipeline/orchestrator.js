@@ -22,13 +22,23 @@ import { escapeHtml } from '../format.js';
 
 export const seenSignalCandidates = new Map();
 
+// The Telegram "Max Pos" buttons write to the active strategy's max_open_positions
+// field, not the global max_open_positions setting — numSetting('max_open_positions', 3)
+// only applies when a strategy leaves it unset. Logging/guardrails should reflect the
+// actual limit in effect (what canOpenMorePositions() checks), or the numbers shown to
+// the user won't match what's configured on-screen.
+function effectiveMaxOpenPositions() {
+  const strat = activeStrategy();
+  return strat.max_open_positions ?? numSetting('max_open_positions', 3);
+}
+
 setDegenHandler(maybeProcessDegenCandidate);
 setCandidateHandler(processCandidateFromSignals);
 
 export async function processCandidateFromSignals(signals) {
   // Skip if max positions reached — don't waste enrichment/LLM calls
   if (!canOpenMorePositions()) {
-    const max = numSetting('max_open_positions', 3);
+    const max = effectiveMaxOpenPositions();
     console.log(`[agent] max positions reached (${openPositionCount()}/${max}), skipping ${signals.mint.slice(0, 8)}...`);
     return;
   }
@@ -204,7 +214,7 @@ export async function processCandidateFromSignals(signals) {
   // #6: Buy the LLM's selected candidate regardless of which candidate triggered the batch
   if (selectedRow && boolSetting('agent_enabled', true) && batchDecision.verdict === 'BUY' && batchDecision.confidence >= numSetting('llm_min_confidence')) {
     if (!canOpenMorePositions()) {
-      const max = numSetting('max_open_positions', 3);
+      const max = effectiveMaxOpenPositions();
       console.log(`[agent] max open positions reached (${openPositionCount()}/${max}), skipping buy ${selectedRow.candidate.token.mint}`);
       logDecisionEvent({
         batchId,
@@ -250,7 +260,7 @@ export async function processCandidateFromSignals(signals) {
         agentEnabled: boolSetting('agent_enabled', true),
         confidenceThreshold: numSetting('llm_min_confidence'),
         openPositions: openPositionCount(),
-        maxOpenPositions: numSetting('max_open_positions', 3),
+        maxOpenPositions: effectiveMaxOpenPositions(),
       },
     });
   }
@@ -296,6 +306,24 @@ export async function handleApprovedBuy(selectedRow, decision, batchId, rows = [
     let positionId, isNew, pastWinPnlSol, pastWinClosedAtMs;
     try {
       const result = await createDryRunPosition(freshSelectedRow.id, freshSelectedRow.candidate, decision, `llm_batch_${batchId}`);
+      if (result.blockedBy === 'max_open_positions') {
+        // Passed the pre-check earlier in this function, but the cap filled up during the
+        // await gap (concurrent entries racing in) — the transaction's atomic re-check
+        // caught it. Report this instead of going silent, since from the outside a
+        // dropped notification looks identical to a bug.
+        logDecisionEvent({
+          batchId,
+          triggerCandidateId,
+          selectedRow: freshSelectedRow,
+          rows: executionRows,
+          decision,
+          mode,
+          action: 'entry_skipped_max_positions_at_insert',
+          guardrails: { openPositions: openPositionCount() },
+        });
+        await sendTelegram(`⏸️ ${escapeHtml(freshSelectedRow.candidate.token.symbol)} skipped — max open positions filled by a concurrent entry just before this one landed.`);
+        return;
+      }
       positionId = result.id;
       isNew = result.isNew;
       pastWinPnlSol = result.pastWinPnlSol;
@@ -311,7 +339,7 @@ export async function handleApprovedBuy(selectedRow, decision, batchId, rows = [
         mode,
         action: 'dry_run_position_create_failed',
         guardrails: {
-          maxOpenPositions: numSetting('max_open_positions', 3),
+          maxOpenPositions: effectiveMaxOpenPositions(),
           openPositions: openPositionCount(),
         },
         execution: { 
@@ -331,7 +359,7 @@ export async function handleApprovedBuy(selectedRow, decision, batchId, rows = [
     
     // FIX #4: Enhanced past-win guard logging with context
     const guardrails = {
-      maxOpenPositions: numSetting('max_open_positions', 3),
+      maxOpenPositions: effectiveMaxOpenPositions(),
       openPositions: openPositionCount(),
       pastWinPnlSol: pastWinPnlSol ?? null,
       pastWinClosedAtMs: pastWinClosedAtMs ?? null,
@@ -390,7 +418,7 @@ export async function handleApprovedBuy(selectedRow, decision, batchId, rows = [
       decision,
       mode,
       action: 'confirm_intent_created',
-      guardrails: { maxOpenPositions: numSetting('max_open_positions', 3), openPositions: openPositionCount() },
+      guardrails: { maxOpenPositions: effectiveMaxOpenPositions(), openPositions: openPositionCount() },
       execution: { intentId },
     });
     await sendTradeIntent(intentId, freshSelectedRow.candidate, decision);
@@ -409,7 +437,7 @@ export async function handleApprovedBuy(selectedRow, decision, batchId, rows = [
       decision,
       mode,
       action: 'live_entry_failed',
-      guardrails: { maxOpenPositions: numSetting('max_open_positions', 3), openPositions: openPositionCount() },
+      guardrails: { maxOpenPositions: effectiveMaxOpenPositions(), openPositions: openPositionCount() },
       execution: { intentId, error: err.message },
     });
     await sendTelegram([

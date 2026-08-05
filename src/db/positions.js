@@ -70,6 +70,21 @@ export function createDryRunPosition(candidateId, candidate, decision, reason = 
     `).get(candidate.token.mint);
     if (existing) return { id: existing.id, isNew: false };
 
+    // Atomic re-check: the caller's canOpenMorePositions() check happens before an
+    // `await` (LLM call / execution refresh), so concurrent candidates can all pass
+    // it while the count is still stale, then all reach here before any of them is
+    // counted — that's how open positions blew past the configured cap. This check
+    // is inside the same synchronous db.transaction as the INSERT below (no `await`
+    // between them), so it's race-free against other calls to this function.
+    const maxOpen = strat.max_open_positions ?? numSetting('max_open_positions', 3);
+    if (maxOpen > 0) {
+      const openCount = db.prepare(`SELECT COUNT(*) AS count FROM dry_run_positions WHERE status = 'open'`).get().count;
+      if (openCount >= maxOpen) {
+        console.log(`[positions] blocked entry ${candidate.token.symbol} (${candidate.token.mint.slice(0, 8)}) — max open positions reached (${openCount}/${maxOpen}) at insert time`);
+        return { id: null, isNew: false, blockedBy: 'max_open_positions' };
+      }
+    }
+
     // Dedup: block re-entry if this token has been closed within 24 hours
     const recentClosed = db.prepare(`
       SELECT id FROM dry_run_positions WHERE mint = ? AND status = 'closed' AND closed_at_ms > ? LIMIT 1
