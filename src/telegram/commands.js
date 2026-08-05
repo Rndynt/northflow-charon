@@ -39,6 +39,16 @@ export async function handleMessage(msg) {
   if (!text.startsWith('/')) return;
   if (text.startsWith('/menu')) return sendMenu(chatId);
   if (text.startsWith('/positions')) return sendPositions(chatId);
+  if (text.startsWith('/position')) {
+    const id = Number(text.split(/\s+/)[1]);
+    if (!id) return bot.sendMessage(chatId, 'Usage: /position <id>\\n\\nID ada di baris "#<id>" pada /positions.');
+    return sendPosition(chatId, id);
+  }
+  if (text.startsWith('/close')) {
+    const id = Number(text.split(/\s+/)[1]);
+    if (!id) return bot.sendMessage(chatId, 'Usage: /close <id>\\n\\nID ada di baris "#<id>" pada /positions.');
+    return closePosition(chatId, id, 'MANUAL');
+  }
   if (text.startsWith('/filters')) return bot.sendMessage(chatId, filtersText(), { parse_mode: 'HTML' });
   if (text.startsWith('/strategy')) {
     const parts = text.split(/\s+/);
@@ -247,6 +257,8 @@ export function setupTelegram() {
     { command: 'strategy', description: 'Show/switch strategy' },
     { command: 'stratset', description: 'Set strategy config (stratset id key value)' },
     { command: 'positions', description: 'Show dry-run positions' },
+    { command: 'position', description: 'Show one position + actions (position <id>)' },
+    { command: 'close', description: 'Manually close a position (close <id>)' },
     { command: 'candidate', description: 'Show candidate by mint' },
     { command: 'filters', description: 'Show filters' },
     { command: 'pnl', description: 'Show saved-wallet PnL' },
