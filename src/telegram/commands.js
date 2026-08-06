@@ -191,11 +191,25 @@ export async function sendPositions(chatId) {
   });
 }
 
-export async function sendFilteredPositions(chatId, status) {
+export async function sendFilteredPositions(chatId, status, query = null) {
   const rows = allPositions(12);
   const chunks = filteredPositionsListChunks(rows, status);
-  for (const chunk of chunks) {
-    await bot.sendMessage(chatId, chunk, { parse_mode: 'HTML', disable_web_page_preview: true });
+  const refreshButton = {
+    reply_markup: { inline_keyboard: [[{ text: '🔄 Refresh', callback_data: `posfilter:${status}` }]] },
+  };
+  // Most of the time this is a single chunk (open positions rarely exceed a
+  // handful) — edit the existing message in place so tapping Refresh updates
+  // the same bubble instead of stacking a new one every time.
+  if (query && chunks.length === 1) {
+    return editMenuMessage(query, chunks[0], refreshButton);
+  }
+  for (let i = 0; i < chunks.length; i++) {
+    const isLast = i === chunks.length - 1;
+    await bot.sendMessage(chatId, chunks[i], {
+      parse_mode: 'HTML',
+      disable_web_page_preview: true,
+      ...(isLast ? refreshButton : {}),
+    });
   }
 }
 
