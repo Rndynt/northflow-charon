@@ -23,7 +23,7 @@ import { candidateById, updateCandidateStatus } from '../db/candidates.js';
 import { storeDecision, logDecisionEvent } from '../db/decisions.js';
 import { createDryRunPosition, canOpenMorePositions, openPositionCount, tradingMode } from '../db/positions.js';
 import { executeLiveBuy, executeConfirmedIntent, rejectIntent } from '../execution/router.js';
-import { sendCandidate, sendPosition, closePosition, updatePositionRule, toggleTrailing } from './commands.js';
+import { sendCandidate, sendPosition, closePosition, updatePositionRule, toggleTrailing, sendFilteredPositions } from './commands.js';
 import { requestNumericFilterInput, requestStrategyNumericInput } from './input.js';
 
 export async function handleCallback(query) {
@@ -128,6 +128,7 @@ export async function handleCallback(query) {
   }
   if (kind === 'tpsl') return sendTpSlDefaults(chatId, query);
   if (kind === 'pos') return sendPosition(chatId, Number(id), query);
+  if (kind === 'posfilter') return sendFilteredPositions(chatId, id === 'open' ? 'open' : 'closed');
   if (kind === 'sell') return closePosition(chatId, Number(id), 'MANUAL');
   if (kind === 'tp') return updatePositionRule(chatId, Number(id), 'tp_percent', Number(value), query);
   if (kind === 'sl') return updatePositionRule(chatId, Number(id), 'sl_percent', Number(value), query);

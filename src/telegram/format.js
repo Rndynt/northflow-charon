@@ -154,6 +154,31 @@ export function positionsListChunks(rows, limit = TELEGRAM_SAFE_CHUNK) {
   return chunks;
 }
 
+// Same greedy packing as positionsListChunks, but pre-filtered to a single
+// status — used by the /positions Open/Closed buttons so each view is its
+// own short, scrollable set of bubbles instead of one open+closed wall of text.
+export function filteredPositionsListChunks(rows, status, limit = TELEGRAM_SAFE_CHUNK) {
+  const filtered = rows.filter((row) => (status === 'open' ? row.status === 'open' : row.status !== 'open'));
+  const emoji = status === 'open' ? '🟢' : '🔴';
+  const label = status === 'open' ? 'Open' : 'Closed';
+  const header = `📍 <b>Positions</b> — ${emoji} <b>${label} (${filtered.length})</b>`;
+  const blocks = [header, ...(filtered.length ? filtered.map(formatPosition) : [`No ${label.toLowerCase()} positions.`])];
+
+  const chunks = [];
+  let current = '';
+  for (const block of blocks) {
+    const candidate = current ? `${current}\n\n${block}` : block;
+    if (candidate.length > limit && current) {
+      chunks.push(current);
+      current = block;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
 export function positionsListText(rows) {
   if (!rows.length) return '📍 <b>Positions</b>\n\nNo dry-run positions yet.';
   const open = rows.filter((row) => row.status === 'open');

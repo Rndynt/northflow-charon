@@ -23,7 +23,7 @@ import {
   strategyKeyboard,
 } from './menus.js';
 import { sendTelegram, sendBatch, sendPositionOpen } from './send.js';
-import { candidateSummary, formatPosition, positionsListText, positionsListChunks } from './format.js';
+import { candidateSummary, formatPosition, positionsListText, filteredPositionsListChunks } from './format.js';
 import { refreshPosition } from '../execution/positions.js';
 import { executeLiveSell } from '../execution/router.js';
 import { handleCallback, editMenuMessage } from './callbacks.js';
@@ -169,7 +169,31 @@ export async function sendCandidate(chatId, id) {
 
 export async function sendPositions(chatId) {
   const rows = allPositions(12);
-  const chunks = positionsListChunks(rows);
+  const openCount = rows.filter((row) => row.status === 'open').length;
+  const closedCount = rows.length - openCount;
+  const text = [
+    '📍 <b>Positions</b>',
+    '',
+    `🟢 Open: <b>${openCount}</b> · 🔴 Closed: <b>${closedCount}</b>`,
+    '',
+    'Pick a list below — kept separate so open and closed positions don\'t pile into one long scroll.',
+  ].join('\n');
+  await bot.sendMessage(chatId, text, {
+    parse_mode: 'HTML',
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: `🟢 Open (${openCount})`, callback_data: 'posfilter:open' },
+          { text: `🔴 Closed (${closedCount})`, callback_data: 'posfilter:closed' },
+        ],
+      ],
+    },
+  });
+}
+
+export async function sendFilteredPositions(chatId, status) {
+  const rows = allPositions(12);
+  const chunks = filteredPositionsListChunks(rows, status);
   for (const chunk of chunks) {
     await bot.sendMessage(chatId, chunk, { parse_mode: 'HTML', disable_web_page_preview: true });
   }
