@@ -83,7 +83,24 @@ export async function executeLiveBuy(selectedRow, decision, batchId, rows = [], 
     ].join('\n'));
     throw lastError || new Error('Live buy failed without exception');
   }
-  const { id: positionId, isNew } = createLivePosition(selectedRow.id, candidate, decision, swap, `live_batch_${batchId}`);
+  const { id: positionId, isNew, blockedBy } = createLivePosition(selectedRow.id, candidate, decision, swap, `live_batch_${batchId}`);
+  if (blockedBy === 'max_open_positions') {
+    // The swap already executed on-chain at this point — real funds moved. Blocking
+    // the position record here would leave the trade untracked, so this must never
+    // silently drop it. Surface it loudly; this should be rare in practice since live
+    // buys are already serialized by the earlier balance/attempt checks, unlike the
+    // concurrent dry-run candidate bursts this guard was built for.
+    console.error(`[router] CRITICAL: live swap executed but position insert blocked by max_open_positions for ${candidate.token.mint} — trade is untracked, investigate immediately`);
+    await sendTelegram([
+      '🚨 <b>Live swap executed but NOT recorded</b>',
+      '',
+      candidateSummary(candidate, decision),
+      '',
+      `Mint: <code>${escapeHtml(candidate.token.mint)}</code>`,
+      'The on-chain buy went through but hit the max-open-positions guard when saving — this position is untracked. Check your wallet and add it manually if needed.',
+    ].join('\n'));
+    return;
+  }
   logDecisionEvent({
     batchId,
     triggerCandidateId,
@@ -145,7 +162,22 @@ export async function executeConfirmedIntent(chatId, intentId) {
     if (!swap.outputAmount) {
       swap.outputAmount = await fetchLiveTokenBalance(freshRow.candidate.token.mint) || swap.outputAmount;
     }
-    const { id: positionId, isNew } = createLivePosition(intent.candidate_id, freshRow.candidate, decision, swap, `confirmed_intent_${intentId}`);
+    const { id: positionId, isNew, blockedBy } = createLivePosition(intent.candidate_id, freshRow.candidate, decision, swap, `confirmed_intent_${intentId}`);
+    if (blockedBy === 'max_open_positions') {
+      // Same as executeLiveBuy: the swap already executed on-chain, so this must not
+      // silently vanish. Mark the intent executed (the swap DID happen) but alert loudly
+      // since the position record itself didn't get saved.
+      db.prepare('UPDATE trade_intents SET status = ?, updated_at_ms = ? WHERE id = ?').run('executed_live', now(), intentId);
+      console.error(`[router] CRITICAL: live swap executed but position insert blocked by max_open_positions for ${freshRow.candidate.token.mint} (confirmed_intent_${intentId}) — trade is untracked, investigate immediately`);
+      return bot.sendMessage(chatId, [
+        '🚨 <b>Live swap executed but NOT recorded</b>',
+        '',
+        candidateSummary(freshRow.candidate, decision),
+        '',
+        `Mint: <code>${escapeHtml(freshRow.candidate.token.mint)}</code>`,
+        'The on-chain buy went through but hit the max-open-positions guard when saving — this position is untracked. Check your wallet and add it manually if needed.',
+      ].join('\n'), { parse_mode: 'HTML', disable_web_page_preview: true });
+    }
     db.prepare('UPDATE trade_intents SET status = ?, updated_at_ms = ? WHERE id = ?').run('executed_live', now(), intentId);
     logDecisionEvent({
       batchId: null,

@@ -1,5 +1,5 @@
 import { now, pruneSeen } from '../utils.js';
-import { numSetting, boolSetting } from '../db/settings.js';
+import { numSetting, boolSetting, activeStrategy, effectiveMaxOpenPositions } from '../db/settings.js';
 import { db } from '../db/connection.js';
 import { upsertCandidate, updateCandidateStatus, recentEligibleCandidates, candidateById } from '../db/candidates.js';
 import { storeDecision, storeBatchDecision, logDecisionEvent, checkDecisionCache } from '../db/decisions.js';
@@ -7,7 +7,6 @@ import { buildCandidate, filterCandidate, signalLabel } from './candidateBuilder
 import { preScoreCandidate } from './preScorer.js';
 import { momentumFilter } from './momentumFilter.js';
 import { decideCandidateBatch } from './llm.js';
-import { activeStrategy } from '../db/settings.js';
 import { createDryRunPosition, createLivePosition, canOpenMorePositions, openPositionCount, tradingMode } from '../db/positions.js';
 import { sendBatchReveal, sendTelegram, sendPositionOpen, sendTradeIntent } from '../telegram/send.js';
 import { candidateSummary } from '../telegram/format.js';
@@ -21,16 +20,6 @@ import { short } from '../format.js';
 import { escapeHtml } from '../format.js';
 
 export const seenSignalCandidates = new Map();
-
-// The Telegram "Max Pos" buttons write to the active strategy's max_open_positions
-// field, not the global max_open_positions setting — numSetting('max_open_positions', 3)
-// only applies when a strategy leaves it unset. Logging/guardrails should reflect the
-// actual limit in effect (what canOpenMorePositions() checks), or the numbers shown to
-// the user won't match what's configured on-screen.
-function effectiveMaxOpenPositions() {
-  const strat = activeStrategy();
-  return strat.max_open_positions ?? numSetting('max_open_positions', 3);
-}
 
 setDegenHandler(maybeProcessDegenCandidate);
 setCandidateHandler(processCandidateFromSignals);

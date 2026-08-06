@@ -44,6 +44,16 @@ export function strategyById(id) {
   return { id: row.id, name: row.name, ...JSON.parse(row.config_json) };
 }
 
+// The Telegram "Max Pos" buttons write to the active strategy's max_open_positions
+// field, not the global max_open_positions setting — numSetting('max_open_positions', 3)
+// only applies when a strategy leaves it unset. Any code that reports or checks the
+// position cap should go through this, or the number shown won't match what's
+// configured on-screen (this is what canOpenMorePositions() in db/positions.js checks).
+export function effectiveMaxOpenPositions() {
+  const strat = activeStrategy();
+  return strat.max_open_positions ?? numSetting('max_open_positions', 3);
+}
+
 export function allStrategies() {
   return db.prepare('SELECT * FROM strategies ORDER BY id').all().map(row => ({
     id: row.id,

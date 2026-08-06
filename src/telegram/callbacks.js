@@ -1,7 +1,7 @@
 import { bot } from './bot.js';
 import { TELEGRAM_CHAT_ID } from '../config.js';
 import { now } from '../utils.js';
-import { numSetting, boolSetting, setSetting, setActiveStrategy, activeStrategy, updateStrategyConfig } from '../db/settings.js';
+import { numSetting, boolSetting, setSetting, setActiveStrategy, activeStrategy, updateStrategyConfig, effectiveMaxOpenPositions } from '../db/settings.js';
 import {
   menuKeyboard,
   filtersText,
@@ -95,7 +95,7 @@ export async function handleCallback(query) {
     const row = candidateById(Number(id));
     if (!row) return bot.sendMessage(chatId, 'Candidate not found.');
     if (!canOpenMorePositions()) {
-      return bot.sendMessage(chatId, `Max open positions reached (${openPositionCount()}/${numSetting('max_open_positions', 3)}). Close one first or raise the limit.`);
+      return bot.sendMessage(chatId, `Max open positions reached (${openPositionCount()}/${effectiveMaxOpenPositions()}). Close one first or raise the limit.`);
     }
     const candidate = row.candidate;
     const decision = { verdict: 'BUY', confidence: 100, reason: 'Manual dry buy', risks: [], suggested_tp_percent: numSetting('default_tp_percent', 50), suggested_sl_percent: numSetting('default_sl_percent', -25) };
@@ -105,7 +105,15 @@ export async function handleCallback(query) {
       await executeLiveBuy(row, decision, 'manual', [row], row.id);
       return;
     }
-    const positionId = await createDryRunPosition(row.id, candidate, decision, 'manual_buy');
+    const result = await createDryRunPosition(row.id, candidate, decision, 'manual_buy');
+    if (result.blockedBy === 'max_open_positions') {
+      // Passed the pre-check above, but another entry (auto or manual) filled the
+      // last slot in the gap before this insert landed — report it instead of
+      // going silent, since createDryRunPosition returns { id: null } in that case
+      // and sendPositionOpen(null) would otherwise no-op with no feedback at all.
+      return bot.sendMessage(chatId, `Max open positions reached (${openPositionCount()}/${effectiveMaxOpenPositions()}) — filled by a concurrent entry just before this one landed.`);
+    }
+    const positionId = result.id;
     logDecisionEvent({
       batchId: 'manual',
       triggerCandidateId: row.id,

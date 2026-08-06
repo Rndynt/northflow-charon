@@ -161,6 +161,18 @@ export function createLivePosition(candidateId, candidate, decision, swap, reaso
     `).get(candidate.token.mint);
     if (existing) return { id: existing.id, isNew: false };
 
+    // Same atomic re-check as createDryRunPosition — see comment there. Not the
+    // currently active mode (dry_run is), but left inconsistent this becomes a bug
+    // waiting for whenever live trading is turned on.
+    const maxOpenLive = strat.max_open_positions ?? numSetting('max_open_positions', 3);
+    if (maxOpenLive > 0) {
+      const openCountLive = db.prepare(`SELECT COUNT(*) AS count FROM dry_run_positions WHERE status = 'open'`).get().count;
+      if (openCountLive >= maxOpenLive) {
+        console.log(`[positions] blocked live entry ${candidate.token.symbol} (${candidate.token.mint.slice(0, 8)}) — max open positions reached (${openCountLive}/${maxOpenLive}) at insert time`);
+        return { id: null, isNew: false, blockedBy: 'max_open_positions' };
+      }
+    }
+
     // Dedup: block re-entry if this token has been closed within 24 hours
     const recentClosed = db.prepare(`
       SELECT id FROM dry_run_positions WHERE mint = ? AND status = 'closed' AND closed_at_ms > ? LIMIT 1
