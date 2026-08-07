@@ -193,6 +193,17 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
   const panicExitEnabled = boolSetting('panic_exit_enabled', true);
   const panicDropPct = numSetting('panic_exit_drop_pct', 30); // exit if dropped >=30% from high-water
   const panicHit = panicExitEnabled && trailDrop <= -panicDropPct && pnlPercent < 0;
+  // HARD CAP: when the circuit breaker fires, cap the realized loss at the panic
+  // drop threshold instead of exiting at the next-poll market price (which can be
+  // far below -30% on an instant rug). This makes the configured stop actually
+  // achievable. Applies to both dry-run stats and live exit pricing.
+  let panicCapMcap = null;
+  if (panicHit && highWaterMcap > 0) {
+    panicCapMcap = highWaterMcap * (1 - panicDropPct / 100);
+    // Recompute pnl against the capped exit so the recorded loss is bounded.
+    mcap = panicCapMcap;
+    pnlPercent = (Number(mcap) / Number(position.entry_mcap) - 1) * 100;
+  }
   // EXIT-FIX 2026-07-25 (backtest 933 trades 07-22..25: base +1,685% -> +8,766% ideal / +6,314% gap).
   // (1) TIGHT TRAIL: once peak pnl >= trailing_tight_from_percent (40), trail tightens from
   //     trailing_percent (10) to trailing_tight_percent (5). Rescues armed winners that round-trip
