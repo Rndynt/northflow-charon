@@ -148,8 +148,30 @@ export function createDryRunPosition(candidateId, candidate, decision, reason = 
 export function createLivePosition(candidateId, candidate, decision, swap, reason = 'live_buy') {
   const strat = activeStrategy();
   const sizeSol = strat.position_size_sol ?? numSetting('dry_run_buy_sol', 0.1);
-  const entryPrice = Number(candidate.metrics.priceUsd || 0) || null;
-  const entryMcap = Number(candidate.metrics.marketCapUsd || candidate.metrics.graduatedMarketCapUsd || 0) || null;
+  // In LIVE mode, derive entry price/mcap from the actual on-chain swap, not the
+  // signal snapshot (which can lag 10-30s and misreport entry). Fall back to the
+  // snapshot only if the swap result is missing.
+  let entryPrice = Number(candidate.metrics.priceUsd || 0) || null;
+  let entryMcap = Number(candidate.metrics.marketCapUsd || candidate.metrics.graduatedMarketCapUsd || 0) || null;
+  if (swap && swap.outputAmount) {
+    const outAmt = Number(swap.outputAmount) || 0;
+    if (outAmt > 0) {
+      // Real execution price = SOL spent / tokens received.
+      entryPrice = sizeSol / outAmt;
+      // Best mcap proxy we have on-chain: derive from the Jupiter order if present.
+      const order = swap.order || {};
+      if (order.outAmount && order.inAmount) {
+        const orderOut = Number(order.outAmount) / 1e6; // Jupiter tokens are 6dp
+        const orderIn = Number(order.inAmount) / 1e9;   // SOL is 9dp
+        if (orderOut > 0) entryPrice = orderIn / orderOut;
+      }
+      entryMcap = entryPrice * (Number(candidate.metrics.supply || 0) || 1e9);
+      if (!Number.isFinite(entryMcap) || entryMcap <= 0) {
+        // Fallback: keep snapshot mcap if derivation failed, but price is now accurate.
+        entryMcap = Number(candidate.metrics.marketCapUsd || candidate.metrics.graduatedMarketCapUsd || 0) || null;
+      }
+    }
+  }
   const tp = Number(decision.suggested_tp_percent || strat.tp_percent || numSetting('default_tp_percent', 50));
   const sl = Number(decision.suggested_sl_percent || strat.sl_percent || numSetting('default_sl_percent', -25));
   const trailingEnabled = (strat.trailing_enabled ?? boolSetting('default_trailing_enabled', true)) ? 1 : 0;
