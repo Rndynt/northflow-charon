@@ -36,11 +36,10 @@ export function learningReportText(runId, summary, lessons) {
   lines.push('');
   lines.push('<b>By Exit Reason</b>');
   if (p.byReason?.length) {
+    const total = p.closed || 1;
+    lines.push(`  (total ${p.closed} closed)`);
     for (const r of p.byReason) {
-      const wr = r.winRate != null ? `${r.winRate.toFixed(0)}%` : '-';
-      const pnl = `${r.pnlPercent >= 0 ? '+' : ''}${r.pnlPercent.toFixed(1)}%`;
-      const emoji = r.pnlPercent >= 0 ? '🟢' : '🔴';
-      lines.push(`  ${emoji} ${escapeHtml(r.reason)} — n=${r.count} · WR ${wr} · ${pnl}`);
+      lines.push(`  ${escapeHtml(r.reason)}: ${r.count} (${r.ratio.toFixed(1)}%)`);
     }
   } else {
     lines.push('  (no closed trades in window)');
