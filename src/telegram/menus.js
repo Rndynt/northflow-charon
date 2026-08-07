@@ -16,9 +16,9 @@ export function menuKeyboard() {
           { text: 'Filters', callback_data: 'menu:filters' },
         ],
         [
+          { text: 'Routes', callback_data: 'menu:routes' },
           { text: 'Wallets', callback_data: 'menu:wallets' },
           { text: 'Positions', callback_data: 'menu:positions' },
-          { text: 'PnL', callback_data: 'menu:pnl' },
         ],
       ],
     },
@@ -128,6 +128,7 @@ export function agentText() {
     `Size: ${fmtSol(strat.position_size_sol)} SOL`,
     `TP/SL: ${fmtPct(strat.tp_percent)} / ${fmtPct(strat.sl_percent)}`,
     `Trailing: ${strat.trailing_enabled ? fmtPct(strat.trailing_percent) : 'off'}`,
+    `Panic Exit: <b>${boolSetting('panic_exit_enabled', true) ? 'on' : 'off'}</b> (${numSetting('panic_exit_drop_pct', 30)}% drop)`,
   ].join('\n');
 }
 
@@ -149,6 +150,9 @@ export function agentKeyboard() {
         [
           { text: 'Batch 5', callback_data: 'set:llm_candidate_pick_count:5' },
           { text: 'Batch 10', callback_data: 'set:llm_candidate_pick_count:10' },
+        ],
+        [
+          { text: `Panic Exit: ${boolSetting('panic_exit_enabled', true) ? 'ON' : 'OFF'}`, callback_data: 'toggle:panic_exit_enabled' },
         ],
         [
           { text: 'Fresh 5m', callback_data: 'set:llm_candidate_max_age_ms:300000' },
@@ -446,4 +450,39 @@ async function editMenuMessage(query, text, extra = {}) {
       ...extra,
     });
   }
+}
+
+// ── Route control menu (toggle which signal routes the agent may trade) ──
+export const ALL_ROUTES = [
+  'pumpportal_graduated',
+  'graduated_trending',
+  'fee_graduated_trending',
+  'fee_trending',
+  'trending',
+  'trenches_completed',
+  'dual_source',
+  'pumpfun_pregrad',
+];
+
+export function blockedRoutes() {
+  return (setting('blocked_routes', 'dual_source,pumpfun_pregrad'))
+    .split(',').map(s => s.trim()).filter(Boolean);
+}
+
+export function routesMenuText() {
+  const blocked = new Set(blockedRoutes());
+  const rows = ALL_ROUTES.map(r => {
+    const on = !blocked.has(r);
+    return `• ${on ? '🟢' : '🔴'} <b>${escapeHtml(r)}</b>`;
+  }).join('\n');
+  return `🛣 <b>Route Control</b>\n\nTap a route to toggle it. 🟢 = trading, 🔴 = blocked.\n\n${rows}\n\n<i>Blocked routes are excluded from candidate selection.</i>`;
+}
+
+export function routesKeyboard() {
+  const blocked = new Set(blockedRoutes());
+  const kb = ALL_ROUTES.map(r => ([
+    { text: `${blocked.has(r) ? '🔴' : '🟢'} ${r}`, callback_data: `routes:${r}` },
+  ]));
+  kb.push([{ text: '« Back', callback_data: 'menu:main' }]);
+  return { reply_markup: { inline_keyboard: kb } };
 }
