@@ -5,7 +5,7 @@ import { escapeHtml, fmtPct } from '../format.js';
 import { db } from '../db/connection.js';
 import { numSetting, boolSetting, setSetting, activeStrategy, setActiveStrategy, strategyById, updateStrategyConfig } from '../db/settings.js';
 import { candidateById, latestCandidateByMint, updateCandidateStatus } from '../db/candidates.js';
-import { allPositions } from '../db/positions.js';
+import { allPositions, openPositionCount } from '../db/positions.js';
 import { storeDecision, logDecisionEvent } from '../db/decisions.js';
 import {
   menuKeyboard,
@@ -194,9 +194,12 @@ export async function sendPositions(chatId) {
 export async function sendFilteredPositions(chatId, status, query = null) {
   const rows = allPositions(12);
   const chunks = filteredPositionsListChunks(rows, status);
-  const refreshButton = {
-    reply_markup: { inline_keyboard: [[{ text: '🔄 Refresh', callback_data: `posfilter:${status}` }]] },
-  };
+  const openCount = rows.filter((row) => row.status === 'open').length;
+  const buttonRows = [[{ text: '🔄 Refresh', callback_data: `posfilter:${status}` }]];
+  if (status === 'open' && openCount > 0) {
+    buttonRows.push([{ text: '❌ Close All', callback_data: 'closeall:ask' }]);
+  }
+  const refreshButton = { reply_markup: { inline_keyboard: buttonRows } };
   // Most of the time this is a single chunk (open positions rarely exceed a
   // handful) — edit the existing message in place so tapping Refresh updates
   // the same bubble instead of stacking a new one every time.
@@ -211,6 +214,59 @@ export async function sendFilteredPositions(chatId, status, query = null) {
       ...(isLast ? refreshButton : {}),
     });
   }
+}
+
+export async function askCloseAllConfirmation(chatId, query) {
+  const openCount = openPositionCount();
+  if (openCount === 0) {
+    return editMenuMessage(query, '📍 No open positions to close.', {
+      reply_markup: { inline_keyboard: [[{ text: '🔙 Back', callback_data: 'posfilter:open' }]] },
+    });
+  }
+  const text = [
+    `⚠️ <b>Close all ${openCount} open position${openCount === 1 ? '' : 's'}?</b>`,
+    '',
+    'This closes each one at its current price and cannot be undone.',
+  ].join('\n');
+  return editMenuMessage(query, text, {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: `✅ Yes, close all ${openCount}`, callback_data: 'closeall:do' }],
+        [{ text: '🔙 Cancel', callback_data: 'closeall:cancel' }],
+      ],
+    },
+  });
+}
+
+export async function closeAllOpenPositions(chatId, query) {
+  const openRows = db.prepare('SELECT id FROM dry_run_positions WHERE status = ?').all('open');
+  if (!openRows.length) {
+    return editMenuMessage(query, '📍 No open positions to close.', {
+      reply_markup: { inline_keyboard: [[{ text: '🔙 Back', callback_data: 'posfilter:open' }]] },
+    });
+  }
+  await editMenuMessage(query, `⏳ Closing ${openRows.length} position${openRows.length === 1 ? '' : 's'}…`, {
+    reply_markup: { inline_keyboard: [] },
+  });
+  // Sequential, not parallel: closePosition's refreshPosition call hits the same
+  // Jupiter endpoints (asset + quote) that back off under 429 when hit in a burst
+  // (see the position-monitor race fix) — closing 8+ positions at once in parallel
+  // would recreate that exact problem right when accuracy matters most (final PnL).
+  let closed = 0;
+  let failed = 0;
+  for (const { id } of openRows) {
+    try {
+      await closePosition(chatId, id, 'MANUAL_CLOSE_ALL');
+      closed += 1;
+    } catch (err) {
+      failed += 1;
+      console.error(`[positions] closeAllOpenPositions: failed to close #${id}: ${err.message}`);
+    }
+  }
+  const summary = failed
+    ? `✅ Closed ${closed} position${closed === 1 ? '' : 's'}. ⚠️ ${failed} failed to close — check /positions and retry those individually.`
+    : `✅ Closed all ${closed} position${closed === 1 ? '' : 's'}.`;
+  await bot.sendMessage(chatId, summary);
 }
 
 export async function sendPosition(chatId, id, query = null) {
