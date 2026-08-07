@@ -19,7 +19,7 @@ Charon is a Telegram bot that screens Solana pump.fun tokens, runs them through 
 
 Everything from the original still applies: signal server, strategies (`sniper`, `dip_buy`, `smart_money`, `degen`), hot-reloaded config in SQLite, Telegram menus, the works.
 
-## Latest additions (post-07-2026)
+## Latest additions (August 2026)
 
 This fork now includes:
 
