@@ -198,7 +198,8 @@ export function computeAtrPercent(chartWindows = [], period = 14) {
 
 export function dynamicStopLossPercent({ baseSlPercent, atrPercent, multiplier = 1.5, floorPercent = -50, ceilingPercent = -8, minAtrPercent = 4, maxAtrPercent = 30 }) {
   const base = Number(baseSlPercent);
-  if (!Number.isFinite(base)) return -25;
+  // SL disabled (null/NaN/non-negative sentinel like 999 or 90) → no stop loss.
+  if (!Number.isFinite(base) || base >= 0) return null;
   if (!Number.isFinite(Number(atrPercent)) || Number(atrPercent) <= 0) {
     return Math.max(floorPercent, Math.min(ceilingPercent, base));
   }

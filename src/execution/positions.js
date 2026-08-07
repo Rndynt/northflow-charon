@@ -179,11 +179,20 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
     }
   }
   const tpHit = pnlPercent >= Number(position.tp_percent);
-  const slHit = pnlPercent <= effectiveSlPercent && pnlPercent < 0; // Lesson 3: don't SL if PnL positive
+  // SL only fires when a valid (negative) stop is configured. effectiveSlPercent is
+  // null when disabled (e.g. SL=999/90 sentinel or explicit off) — never stop out then.
+  const slHit = effectiveSlPercent != null && Number.isFinite(effectiveSlPercent) && effectiveSlPercent < 0 && pnlPercent <= effectiveSlPercent && pnlPercent < 0; // Lesson 3: don't SL if PnL positive
   const armThreshold = numSetting('trailing_arm_percent', Number(position.tp_percent));
   const armHit = pnlPercent >= armThreshold;
   const trailingArmed = position.trailing_armed || (position.trailing_enabled && armHit);
   const trailDrop = highWaterMcap > 0 ? (Number(mcap) / highWaterMcap - 1) * 100 : 0;
+  // PANIC EXIT / circuit breaker: if a token flash-dumps beyond a threshold from its
+  // high-water mark within a single check interval (rug pull / liquidity pull), exit
+  // immediately as SL instead of waiting for the next poll where mcap is already -90%.
+  // This is what makes the configured stop-loss actually achievable on illiquid tokens.
+  const panicExitEnabled = boolSetting('panic_exit_enabled', true);
+  const panicDropPct = numSetting('panic_exit_drop_pct', 30); // exit if dropped >=30% from high-water
+  const panicHit = panicExitEnabled && trailDrop <= -panicDropPct && pnlPercent < 0;
   // EXIT-FIX 2026-07-25 (backtest 933 trades 07-22..25: base +1,685% -> +8,766% ideal / +6,314% gap).
   // (1) TIGHT TRAIL: once peak pnl >= trailing_tight_from_percent (40), trail tightens from
   //     trailing_percent (10) to trailing_tight_percent (5). Rescues armed winners that round-trip
@@ -262,6 +271,7 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
     if (slHit) exitReason = 'SL';
     else if (tpHit && !position.trailing_enabled) exitReason = 'TP';
     else if (trailingHit) exitReason = 'TRAILING_TP';
+    else if (panicHit) exitReason = 'SL'; // circuit breaker: flash-dump past stop
   }
 
 

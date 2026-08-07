@@ -44,6 +44,10 @@ export async function handleCallback(query) {
     setSetting('agent_enabled', boolSetting('agent_enabled', true) ? 'false' : 'true');
     return editMenuMessage(query, agentText(), agentKeyboard());
   }
+  if (data === 'toggle:panic_exit_enabled') {
+    setSetting('panic_exit_enabled', boolSetting('panic_exit_enabled', true) ? 'false' : 'true');
+    return editMenuMessage(query, agentText(), agentKeyboard());
+  }
   if (data === 'toggle:trending_enabled' || data === 'toggle:trending_allow_degen') {
     const key = data.replace('toggle:', '');
     setSetting(key, boolSetting(key, key === 'trending_enabled') ? 'false' : 'true');
@@ -52,6 +56,19 @@ export async function handleCallback(query) {
   if (data === 'menu:filters') return editMenuMessage(query, filtersText(), filtersKeyboard());
   if (data === 'menu:strategy') return editMenuMessage(query, strategyMenuText(), strategyKeyboard());
   if (data === 'menu:wallets') return editMenuMessage(query, walletsText(), navKeyboard());
+  if (data === 'menu:routes') {
+    const { routesMenuText, routesKeyboard } = await import('./menus.js');
+    return editMenuMessage(query, routesMenuText(), routesKeyboard());
+  }
+  if (data.startsWith('routes:')) {
+    const route = data.replace('routes:', '');
+    const { blockedRoutes, ALL_ROUTES, routesMenuText, routesKeyboard } = await import('./menus.js');
+    const blocked = new Set(blockedRoutes());
+    if (blocked.has(route)) blocked.delete(route); else blocked.add(route);
+    // Persist only genuinely blocked routes
+    setSetting('blocked_routes', [...blocked].filter(r => ALL_ROUTES.includes(r)).join(','));
+    return editMenuMessage(query, routesMenuText(), routesKeyboard());
+  }
   if (data === 'menu:positions') return editMenuMessage(query, positionsText(), navKeyboard());
   if (data === 'menu:pnl') {
     const { sendPnl } = await import('./send.js');
@@ -264,6 +281,13 @@ async function updateSettingFromButton(query, key, value) {
     'default_trailing_percent',
   ]);
   if (!valid.has(key) || value == null) return bot.sendMessage(chatId, 'Unknown setting.');
+  // Validate SL settings: only a negative percent (or "off" → -25 fallback) allowed.
+  if (key === 'default_sl_percent') {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n >= 0 || n < -100) {
+      return bot.sendMessage(chatId, '❌ Default SL must be a negative percent (e.g. -25). Use -25 to disable-loose.');
+    }
+  }
   setSetting(key, value);
   const text = key.startsWith('default_') || key === 'dry_run_buy_sol' || key === 'trading_mode' || key === 'llm_min_confidence' || key === 'llm_candidate_pick_count' || key === 'llm_candidate_max_age_ms' || key === 'max_open_positions'
     ? agentText()

@@ -117,6 +117,10 @@ export async function handleMessage(msg) {
     return bot.sendMessage(chatId, `Removed ${label}.`);
   }
   if (text.startsWith('/wallets')) return handleCallback({ id: 'manual', data: 'menu:wallets', message: { chat: { id: chatId } } });
+  if (text.startsWith('/routes')) {
+    const { routesMenuText, routesKeyboard } = await import('./menus.js');
+    return bot.sendMessage(chatId, routesMenuText(), { parse_mode: 'HTML', ...routesKeyboard() });
+  }
   if (text.startsWith('/setfilter')) {
     const { key, value } = parseSetFilter(text);
     const valid = new Set([
@@ -309,7 +313,24 @@ export async function closePosition(chatId, id, reason) {
 }
 
 export async function updatePositionRule(chatId, id, field, nextValue, query = null) {
-  if (!Number.isFinite(nextValue)) return bot.sendMessage(chatId, 'Invalid value.');
+  // Validate SL: only allow a negative percent or the keyword "off" (disable).
+  if (field === 'sl_percent') {
+    if (nextValue === 'off' || nextValue === 'OFF' || nextValue === null) {
+      nextValue = null;
+    } else {
+      const n = Number(nextValue);
+      if (!Number.isFinite(n) || n >= 0 || n < -100) {
+        return bot.sendMessage(chatId, '❌ SL must be a negative percent (e.g. -25) or "off" to disable.');
+      }
+      nextValue = n;
+    }
+  }
+  if (field === 'tp_percent') {
+    const n = Number(nextValue);
+    if (!Number.isFinite(n) || n <= 0) return bot.sendMessage(chatId, '❌ TP must be a positive percent.');
+    nextValue = n;
+  }
+  if (!Number.isFinite(Number(nextValue)) && nextValue !== null) return bot.sendMessage(chatId, 'Invalid value.');
   db.prepare(`UPDATE dry_run_positions SET ${field} = ? WHERE id = ?`).run(nextValue, id);
   const row = db.prepare('SELECT * FROM dry_run_positions WHERE id = ?').get(id);
   if (row) {
@@ -362,6 +383,7 @@ export function setupTelegram() {
     { command: 'walletadd', description: 'Save wallet for exposure/PnL' },
     { command: 'walletremove', description: 'Remove saved wallet' },
     { command: 'wallets', description: 'List saved wallets' },
+    { command: 'routes', description: 'Toggle tradable signal routes (route control)' },
   ]).catch(err => console.log(`[telegram] commands ${err.message}`));
 
   bot.on('callback_query', query => handleCallback(query).catch(err => console.log(`[callback] ${err.message}`)));
