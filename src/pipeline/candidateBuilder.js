@@ -84,9 +84,14 @@ export function filterCandidate(candidate) {
   }
 
   // Market cap checks — skip min_mcap for freshly graduated (tokens just graduated, mcap is tiny)
+  // BUT enforce a hard floor for freshly-graduated tokens too: anything under 15K mcap is
+  // trivially rug-pullable (flash-dumps past any stop-loss). Fix after #202 (-66% on a 6.2K token).
+  const HARD_MCAP_FLOOR = 15000;
   if (strat.min_mcap_usd > 0 && (!Number.isFinite(mcap) || mcap < strat.min_mcap_usd)) {
     if (!freshGrad) {
       failures.push(`market cap min: ${mcap} < ${strat.min_mcap_usd}`);
+    } else if (mcap < HARD_MCAP_FLOOR) {
+      failures.push(`market cap min (fresh grad floor): ${mcap} < ${HARD_MCAP_FLOOR}`);
     }
   }
   if (strat.max_mcap_usd > 0 && Number.isFinite(mcap) && mcap > strat.max_mcap_usd) {
