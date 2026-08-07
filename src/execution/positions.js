@@ -223,7 +223,10 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
   let exitReason = null;
   let closed = false;
 
-  // Max hold time check — tiered by entry mcap
+  // Max hold time check — evaluated LAST (after SL / panic / trailing). A position
+  // may only close on MAX_HOLD if no hard stop (SL), circuit breaker (panic), or
+  // profit target (TP/trailing) fired first. This ensures a token that crashes
+  // -95% exits via PANIC at -30%, not via MAX_HOLD at -95%.
   const strat = strategyById(position.strategy_id);
   const entryMcap = Number(position.entry_mcap) || 0;
   const isMicrocap = entryMcap > 0 && entryMcap < 15000;
@@ -237,9 +240,6 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
   //   effectiveMaxHold = 900000; // 15 min for highcap >60K
   //   console.log(`[position] highcap >60K — max_hold reduced to 15min`);
   // }
-  if (effectiveMaxHold > 0 && (now() - position.opened_at_ms) >= effectiveMaxHold) {
-    exitReason = 'MAX_HOLD';
-  }
 
   // Sideways timeout: if open too long with negligible PnL, exit to free up capital.
   if (!exitReason) {
@@ -277,12 +277,19 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
     }
   }
 
-  // Standard exit checks
+  // Standard exit checks — PRIORITY ORDER (hard stops first, max_hold last)
+  // 1) SL (fixed stop-loss)  2) TP (static target)  3) TRAILING_TP (trailing profit)
+  // 4) PANIC (circuit breaker, hard-capped)  — these all take precedence over MAX_HOLD
   if (!exitReason) {
     if (slHit) exitReason = 'SL';
     else if (tpHit && !position.trailing_enabled) exitReason = 'TP';
     else if (trailingHit) exitReason = 'TRAILING_TP';
     else if (panicHit) exitReason = 'SL'; // circuit breaker: flash-dump past stop
+  }
+
+  // MAX_HOLD — only if no stop/profit fired above
+  if (!exitReason && effectiveMaxHold > 0 && (now() - position.opened_at_ms) >= effectiveMaxHold) {
+    exitReason = 'MAX_HOLD';
   }
 
 
