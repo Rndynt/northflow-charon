@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { WSOL_MINT, JSON_HEADERS, JUPITER_API_KEY } from '../config.js';
 import { now } from '../utils.js';
+import { numSetting } from '../db/settings.js';
 
 // Attach the API key when configured (bumps Keyless 0.5rps -> Free 1rps+, and beyond
 // on paid tiers). Falls back to plain JSON_HEADERS (Keyless) when no key is set, so
@@ -288,6 +289,23 @@ async function fetchTokenSpotViaQuote(mint) {
     ]);
     const outAmount = quoteRes.data?.outAmount;
     if (!outAmount) return null;
+    // Bug fix (2026-08-07): a real case surfaced a position closed at -99.9% SL
+    // ($41 mcap vs $43.6K entry) on its very first refresh, with no observed price
+    // history in between and no corresponding move on-chain/on any chart — the
+    // quote itself was the bad data. priceImpactPct on this tiny fixed-size probe
+    // (worth well under $1 on any normally-liquid token) should be negligible; a
+    // large value here means the quote came from a route with almost no real
+    // liquidity behind it, so the "price" it implies isn't one anyone could
+    // actually trade at. This is different from the >80%-market-drop heuristic
+    // disabled on 2026-07-17 (Guard 2): that judged whether the MARKET moved,
+    // which can't tell a real crash from bad data. This judges whether THIS quote
+    // itself is trustworthy, independent of what "really" happened to the price.
+    const priceImpactPct = Number(quoteRes.data?.priceImpactPct);
+    const maxPriceImpactPct = numSetting('quote_max_price_impact_pct', 25) / 100;
+    if (Number.isFinite(priceImpactPct) && priceImpactPct > maxPriceImpactPct) {
+      console.log(`[quote] ${mint.slice(0, 8)}... rejected — price impact ${(priceImpactPct * 100).toFixed(1)}% exceeds ${(maxPriceImpactPct * 100).toFixed(0)}% (thin-liquidity quote, not a trustworthy price)`);
+      return null;
+    }
     const outSol = Number(outAmount) / 1e9;
     if (!Number.isFinite(solUsd) || solUsd <= 0) return null;
     return (outSol / 1000) * solUsd;
