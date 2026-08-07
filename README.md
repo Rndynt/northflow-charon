@@ -12,7 +12,7 @@ Charon is a Telegram bot that screens Solana pump.fun tokens, runs them through 
 - **GMGN signed auth** — enrichment calls use Ed25519-signed requests against GMGN's API for holder counts, fees, and socials.
 - **Trailing TP guard** — trailing take-profit no longer triggers on underwater positions. It used to "lock in profits" at a loss. Fixed.
 - **Tightened exit logic** — trailing stop narrows once a position clears a peak threshold, with a profit floor after arming. Reduces giving back runners.
-- **Quote-first dry-run exits** — paper exits price off executable Jupiter quotes instead of stale mark data, so dry-run numbers track reality more closely.
+- **Fill-to-fill dry run pricing** — paper entries use an executable Jupiter buy quote and exits use executable Jupiter sell quotes, instead of synthetic mark prices. Recorded PnL includes the simulated entry/exit fill difference and execution fees, so dry-run results track live execution more closely.
 - **Telegram reports + visual cards** — daily PnL reports and rendered entry/exit cards.
 - **Backtest tooling** — scripts that run filter candidates against local trade history so changes get measured before they get deployed.
 - **Live execution hardening** — realized PnL tracking, sell guards, Jupiter Ultra routing.
@@ -76,7 +76,7 @@ Strategy parameters live in SQLite, not `.env`, and are hot-read — most tuning
 
 Run it, open Telegram, `/menu`.
 
-Start with `TRADING_MODE=dry_run`. Watch it for a week. The dry-run numbers will look better than live because paper fills don't suffer slippage — expect 20-50% worse execution on real swaps during volatile moves. Only then decide if live is worth it.
+Start with `TRADING_MODE=dry_run`. Watch it for a week. Dry-run now uses executable Jupiter quotes for both entry and exit, but it is still an estimate: RPC/API failures can trigger fallbacks and live swaps add wallet state, confirmation, and timing risk. Only then decide if live is worth it.
 
 ## Honest warnings
 
