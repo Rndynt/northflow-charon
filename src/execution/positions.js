@@ -284,7 +284,7 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
     if (slHit) exitReason = 'SL';
     else if (tpHit && !position.trailing_enabled) exitReason = 'TP';
     else if (trailingHit) exitReason = 'TRAILING_TP';
-    else if (panicHit) exitReason = 'SL'; // circuit breaker: flash-dump past stop
+    else if (panicHit) exitReason = 'PANIC'; // circuit breaker: flash-dump past stop (hard-capped at panic_exit_drop_pct)
   }
 
   // MAX_HOLD — only if no stop/profit fired above

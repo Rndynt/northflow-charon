@@ -4,7 +4,7 @@ import { now, json } from '../utils.js';
 import { db } from '../db/connection.js';
 import { escapeHtml, fmtPct, fmtSol, fmtUsd, short, gmgnLink } from '../format.js';
 import { numSetting } from '../db/settings.js';
-import { candidateSummary, compactCandidateLine, batchRevealSummary, formatPosition } from './format.js';
+import { candidateSummary, compactCandidateLine, batchRevealSummary, formatPosition, exitReasonLabel } from './format.js';
 import { candidateButtons, batchRevealButtons, positionButtons, intentButtons } from './menus.js';
 import { batchById } from '../db/decisions.js';
 import { generateEntryCard } from '../visuals/entryCard.js';
@@ -98,7 +98,8 @@ export async function sendPositionOpen(positionId) {
 
 export async function sendPositionExit(position) {
   const label = position?.execution_mode === 'live' ? 'Live exit' : 'Dry-run exit';
-  const text = `🏁 <b>${label}: ${escapeHtml(position.exitReason)}</b>\n\n${formatPosition({ ...position, status: 'closed' })}`;
+  const reason = exitReasonLabel(position.exitReason, position);
+  const text = `🏁 <b>${label}: ${escapeHtml(reason)}</b>\n\n${formatPosition({ ...position, status: 'closed' })}`;
   let photoSent = false;
   try {
     const buffer = await generateExitCard(position);

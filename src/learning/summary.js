@@ -31,6 +31,22 @@ export function summarizeLearningWindow(windowMs) {
     row.pnlSol += Number(position.pnl_sol || 0);
     byRoute.set(route, row);
   }
+  const byReason = new Map();
+  for (const position of closed) {
+    const reason = position.exit_reason || 'unknown';
+    const row = byReason.get(reason) || { reason, count: 0, wins: 0, losses: 0, pnlPercent: 0 };
+    row.count += 1;
+    row.wins += Number(position.pnl_percent || 0) > 0 ? 1 : 0;
+    row.losses += Number(position.pnl_percent || 0) < 0 ? 1 : 0;
+    row.pnlPercent += Number(position.pnl_percent || 0);
+    byReason.set(reason, row);
+  }
+  const byReasonArr = [...byReason.values()].map(row => ({
+    ...row,
+    winRate: row.count ? row.wins / row.count * 100 : null,
+    avgPnlPercent: row.count ? row.pnlPercent / row.count : null,
+  })).sort((a, b) => b.pnlPercent - a.pnlPercent);
+
   const batches = db.prepare(`
     SELECT verdict, COUNT(*) AS count, AVG(confidence) AS avg_confidence
     FROM llm_batches
@@ -81,6 +97,7 @@ export function summarizeLearningWindow(windowMs) {
         winRate: row.count ? row.wins / row.count * 100 : null,
         avgPnlPercent: row.count ? row.pnlPercent / row.count : null,
       })).sort((a, b) => b.pnlPercent - a.pnlPercent),
+      byReason: byReasonArr,
       best,
       worst,
     },

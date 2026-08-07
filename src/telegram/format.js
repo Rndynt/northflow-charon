@@ -1,5 +1,28 @@
 import { escapeHtml, fmtPct, fmtSol, fmtUsd, short, gmgnLink, txLink, accountLink } from '../format.js';
 
+// Human-readable exit reason labels for Telegram / reports.
+const EXIT_REASON_LABELS = {
+  SL: 'SL (stop-loss)',
+  TP: 'TP (take-profit)',
+  TRAILING_TP: 'TRAILING_TP (trailing profit)',
+  PANIC: 'PANIC (circuit breaker -30%)',
+  MAX_HOLD: 'MAX_HOLD (time limit)',
+  SIDEWAYS_TIMEOUT: 'SIDEWAYS_TIMEOUT',
+  MANUAL_CLOSE: 'MANUAL_CLOSE',
+  MANUAL_CLOSE_ALL: 'MANUAL_CLOSE_ALL',
+};
+
+export function exitReasonLabel(reason, position = null) {
+  const label = EXIT_REASON_LABELS[reason] || reason;
+  if (reason === 'PANIC' && position) {
+    const drop = (position.panic_exit_drop_pct != null)
+      ? position.panic_exit_drop_pct
+      : 30;
+    return `PANIC (circuit breaker -${drop}%)`;
+  }
+  return label;
+}
+
 export function formatRecipients(shareholders) {
   if (!shareholders?.length) return '';
   return shareholders.slice(0, 5).map((holder, index) => {
@@ -117,7 +140,7 @@ export function formatPosition(position) {
       : `Entry mcap: ${fmtUsd(position.entry_mcap)} · High: ${fmtUsd(position.high_water_mcap)}`,
     `Size: ${fmtSol(position.size_sol)} SOL · PnL: ${fmtPct(pnl)}${staleness != null ? ` (${staleness}s ago)` : ''}`,
     `TP: ${fmtPct(position.tp_percent)} · SL: ${fmtPct(position.sl_percent)} · Trail: ${position.trailing_enabled ? `${fmtPct(position.trailing_percent)}` : 'off'}`,
-    position.exit_reason ? `Exit: ${escapeHtml(position.exit_reason)} at ${fmtUsd(position.exit_mcap)} (${fmtPct(position.pnl_percent)})` : null,
+    position.exit_reason ? `Exit: ${exitReasonLabel(position.exit_reason, position)} at ${fmtUsd(position.exit_mcap)} (${fmtPct(position.pnl_percent)})` : null,
     position.exit_signature ? `Exit TX: <a href="${txLink(position.exit_signature)}">${short(position.exit_signature)}</a>` : null,
   ].filter(Boolean).join('\n');
 }
