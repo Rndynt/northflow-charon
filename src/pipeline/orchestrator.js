@@ -1,5 +1,5 @@
 import { now, pruneSeen } from '../utils.js';
-import { numSetting, boolSetting, activeStrategy, effectiveMaxOpenPositions } from '../db/settings.js';
+import { numSetting, boolSetting, setting, activeStrategy, effectiveMaxOpenPositions } from '../db/settings.js';
 import { db } from '../db/connection.js';
 import { upsertCandidate, updateCandidateStatus, recentEligibleCandidates, candidateById } from '../db/candidates.js';
 import { storeDecision, storeBatchDecision, logDecisionEvent, checkDecisionCache } from '../db/decisions.js';
@@ -25,6 +25,17 @@ setDegenHandler(maybeProcessDegenCandidate);
 setCandidateHandler(processCandidateFromSignals);
 
 export async function processCandidateFromSignals(signals) {
+  // ROUTE BLOCK GUARD — applies to BOTH rule-based (use_llm:false) and LLM modes.
+  // Without this, rule-based strategies (e.g. degen) buy blocked routes (pumpfun_pregrad,
+  // dual_source) because they skip recentEligibleCandidates() which is the only other filter.
+  const route = signals?.route || signals?.signals?.route || '';
+  const BLOCKED_ROUTES = (setting('blocked_routes', 'dual_source,pumpfun_pregrad'))
+    .split(',').map(s => s.trim()).filter(Boolean);
+  if (route && BLOCKED_ROUTES.some(br => String(route).includes(br))) {
+    console.log(`[agent] skipping ${signals.mint.slice(0, 8)}... — route "${route}" is blocked (settings.blocked_routes)`);
+    return;
+  }
+
   // Skip if max positions reached — don't waste enrichment/LLM calls
   if (!canOpenMorePositions()) {
     const max = effectiveMaxOpenPositions();

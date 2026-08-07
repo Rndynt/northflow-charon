@@ -1,6 +1,6 @@
 import { db } from './connection.js';
 import { now, safeJson, json } from '../utils.js';
-import { numSetting } from './settings.js';
+import { numSetting, setting } from './settings.js';
 
 export function candidateSignalKey(candidate, signature = null) {
   const route = candidate.signals?.route || 'signal';
@@ -97,10 +97,15 @@ export function latestCandidateByMint(mint) {
 export function recentEligibleCandidates(limit = 10) {
   const maxAgeMs = numSetting('llm_candidate_max_age_ms', 10 * 60 * 1000);
   const cutoff = now() - Math.max(30_000, maxAgeMs);
-  // Lesson #3: block unprofitable routes at query level — prevents blocked routes from drowning out profitable ones
-  // pumpfun_pregrad: pre-grad tokens still on bonding curve, can't reliably trade yet — keep for data only
-  const BLOCKED_ROUTES = ['dual_source', 'fee_graduated_trending', 'pumpfun_pregrad', 'graduated_trending'];
-  const blockedClause = BLOCKED_ROUTES.map(r => `signal_key NOT LIKE '${r}:%'`).join(' AND ');
+  // Lesson #3: block unprofitable routes at query level — prevents blocked routes from drowning out profitable ones.
+  // Routes are now configurable via the `blocked_routes` setting (comma-separated), so they can be toggled from Telegram.
+  // Default keeps dual_source / pumpfun_pregrad blocked (consistently unprofitable in backtests), but UNBLOCKS
+  // graduated_trending / fee_graduated_trending (these were profitable — backtest showed +6.9% / +6.4% avg).
+  const BLOCKED_ROUTES = (setting('blocked_routes', 'dual_source,pumpfun_pregrad'))
+    .split(',').map(s => s.trim()).filter(Boolean);
+  const blockedClause = BLOCKED_ROUTES.length
+    ? BLOCKED_ROUTES.map(r => `signal_key NOT LIKE '${r}:%'`).join(' AND ')
+    : '1=1';
   const rows = db.prepare(`
     SELECT c.*
     FROM candidates c

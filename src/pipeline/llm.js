@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { ENABLE_LLM, LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, LLM_TIMEOUT_MS, LLM_MODEL_CHEAP, LLM_BASE_URL_CHEAP, LLM_API_KEY_CHEAP, LLM_OPENROUTER_MODEL, LLM_OPENROUTER_API_KEY, LLM_FALLBACK_BASE_URL, LLM_FALLBACK_API_KEY, LLM_FALLBACK_MODEL } from '../config.js';
 import { now, stripThinking, strictJsonFromText } from '../utils.js';
-import { numSetting } from '../db/settings.js';
+import { numSetting, setting } from '../db/settings.js';
 import { db } from '../db/connection.js';
 import { storeSignalEvent } from '../signals/trending.js';
 
@@ -15,8 +15,11 @@ function llmBuyMinConfidence() {
 }
 function llmLowConfidenceCap() { return numSetting('llm_low_confidence_cap', 70); }
 
-// Lesson #3: dual_source and graduated_trending consistently lose money — disable them
-const BLOCKED_ROUTES = ['dual_source', 'fee_graduated_trending', 'graduated_trending'];
+// Routes are configurable via the `blocked_routes` setting (comma-separated), toggled from Telegram /routes.
+// Default blocks dual_source and pumpfun_pregrad (consistently unprofitable in backtests).
+// NOTE: graduated_trending is PROFITABLE (+7.6% in backtest) — do NOT block it here.
+const BLOCKED_ROUTES = (setting('blocked_routes', 'dual_source,pumpfun_pregrad'))
+  .split(',').map(s => s.trim()).filter(Boolean);
 
 export function normalizeDecision(parsed, fallbackReason = '', route = '') {
   let verdict = ['BUY', 'WATCH', 'PASS'].includes(String(parsed?.verdict).toUpperCase())
