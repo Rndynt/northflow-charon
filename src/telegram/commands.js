@@ -90,7 +90,7 @@ export async function handleMessage(msg) {
   if (text.startsWith('/pnl')) return sendPnl(chatId);
   if (text.startsWith('/report')) return sendDailyReport(chatId);
   if (text.startsWith('/learn')) {
-    const windowArg = text.split(/\s+/)[1] || '12h';
+    const windowArg = text.split(/\s+/)[1] || '24h';
     return runLearning(chatId, windowArg);
   }
   if (text.startsWith('/lessons')) return sendLessons(chatId);
