@@ -19,6 +19,55 @@ export async function fetchSavedWalletExposure(mint, holders) {
   };
 }
 
+import { spawn } from 'node:child_process';
+
+// Pull the active smart-money trade feed from GMGN via the official gmgn-cli and return the
+// unique wallet addresses seen trading (with their tag labels). Manual trigger only — no auto-run.
+// Requires gmgn-cli installed globally and GMGN_API_KEY / GMGN_PRIVATE_KEY set in the environment.
+export async function fetchGmgnSmartWallets({ limit = 100, chain = 'sol' } = {}) {
+  return new Promise((resolve, reject) => {
+    const args = ['track', 'smartmoney', '--chain', chain, '--limit', String(limit), '--raw'];
+    const proc = spawn('gmgn-cli', args, { env: process.env });
+    let out = '', err = '';
+    proc.stdout.on('data', (d) => (out += d));
+    proc.stderr.on('data', (d) => (err += d));
+    proc.on('close', (code) => {
+      if (code !== 0) return reject(new Error(`gmgn-cli exited ${code}: ${err.slice(0, 200)}`));
+      try {
+        const parsed = JSON.parse(out.trim());
+        const list = parsed?.list || parsed?.data?.list || [];
+        const seen = new Map();
+        for (const t of list) {
+          const addr = t.maker || t.wallet || t.address;
+          if (!addr || seen.has(addr)) continue;
+          const tags = (t.maker_info?.tags || []).join(',');
+          seen.set(addr, tags);
+        }
+        resolve([...seen.entries()].map(([address, tags]) => ({ address, tags })));
+      } catch (e) {
+        reject(new Error(`parse failed: ${e.message} raw=${out.slice(0, 120)}`));
+      }
+    });
+  });
+}
+
+// Insert GMGN smart-money wallets into saved_wallets (used by candidate scoring).
+// Manual only — call from a Telegram command.
+export async function importGmgnSmartWallets(opts) {
+  const wallets = await fetchGmgnSmartWallets(opts);
+  const insert = db.prepare(
+    'INSERT OR IGNORE INTO saved_wallets (label, address, created_at_ms) VALUES (?, ?, ?)'
+  );
+  let count = 0;
+  const ts = now();
+  for (const w of wallets) {
+    const label = `gmgn_smart|${w.tags}`;
+    insert.run(label, w.address, ts);
+    count++;
+  }
+  return { fetched: wallets.length, inserted: count, total: savedWallets().length };
+}
+
 export async function fetchWalletPnl(address) {
   try {
     const url = `https://datapi.jup.ag/v1/pnl?addresses=${encodeURIComponent(address)}&includeClosed=false`;

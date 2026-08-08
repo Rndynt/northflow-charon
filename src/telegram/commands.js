@@ -29,7 +29,7 @@ import { executeLiveSell } from '../execution/router.js';
 import { handleCallback, editMenuMessage } from './callbacks.js';
 import { consumeNumericFilterInput } from './input.js';
 import { runLearning, sendLessons } from '../learning/commands.js';
-import { fetchWalletPnl } from '../enrichment/wallets.js';
+import { fetchWalletPnl, importGmgnSmartWallets } from '../enrichment/wallets.js';
 import { sendDailyReport } from './dailyReport.js';
 
 export async function handleMessage(msg) {
@@ -111,10 +111,20 @@ export async function handleMessage(msg) {
     return bot.sendMessage(chatId, `Saved wallet ${label}.`);
   }
   if (text.startsWith('/walletremove')) {
-    const label = text.split(/\s+/)[1];
+    const label = text.split(/\\s+/)[1];
     if (!label) return bot.sendMessage(chatId, 'Usage: /walletremove <label>');
     db.prepare('DELETE FROM saved_wallets WHERE label = ?').run(label);
     return bot.sendMessage(chatId, `Removed ${label}.`);
+  }
+  if (text.startsWith('/updatesmartwallets')) {
+    await bot.sendMessage(chatId, '⏳ Fetching smart-money wallets from GMGN…');
+    try {
+      const r = await importGmgnSmartWallets({ limit: 100 });
+      return bot.sendMessage(chatId,
+        `✅ Smart-money wallets imported:\n• fetched: ${r.fetched}\n• inserted (new): ${r.inserted}\n• total saved_wallets: ${r.total}\n\nUsed by candidate scoring (smart_money exposure).`);
+    } catch (e) {
+      return bot.sendMessage(chatId, `❌ Failed: ${e.message}`);
+    }
   }
   if (text.startsWith('/wallets')) return handleCallback({ id: 'manual', data: 'menu:wallets', message: { chat: { id: chatId } } });
   if (text.startsWith('/routes')) {
