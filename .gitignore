@@ -30,3 +30,8 @@ dashboard/
 test_migration_with_key.js
 close_all.js
 backup_trenches_pause.js
+
+# Trade DB dumps/backups — machine-specific, never commit
+charon_dump*.sql
+charon.sqlite.*
+charon.sqlite.bak*

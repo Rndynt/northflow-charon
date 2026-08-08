@@ -388,7 +388,10 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
     // Apply exit slippage for dry_run PnL
     const exitMcap = slippageAdjustedMcap(quotePrice ? Number(position.entry_mcap) * (quotePrice / Number(position.entry_price)) : mcap, 'exit');
     const dryExitPrice = quotePrice || price;
-    const dryExitMcap = quotePrice ? Number(position.entry_mcap) * (quotePrice / Number(position.entry_price)) : mcap;
+    // Store the slippage-adjusted mcap as exit_mcap so it matches pnl_percent/pnl_sol (which are
+    // also computed from the adjusted value). Previously exit_mcap was raw while pnl% was adjusted
+    // — anyone recomputing pnl from exit_mcap/entry_mcap in the DB would get a different number.
+    const dryExitMcap = exitMcap;
     const dryPnlPercent = (Number(exitMcap) / Number(position.entry_mcap) - 1) * 100;
     const dryPnlSol = Number(position.size_sol) * dryPnlPercent / 100;
     db.prepare(`
