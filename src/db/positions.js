@@ -205,11 +205,16 @@ export function createLivePosition(candidateId, candidate, decision, swap, reaso
     }
 
     // Block re-entry if this mint ever had a winning trade (avoid round-trip losses)
+    // Block re-entry if this mint had a winning trade in the last WIN_BLOCK_DAYS days (avoid
+    // round-trip losses). Mirrors createDryRunPosition so dry-run and live share the same rule.
+    const WIN_BLOCK_DAYS = 7;
     const pastWin = db.prepare(`
-      SELECT id FROM dry_run_positions WHERE mint = ? AND status = 'closed' AND pnl_percent > 0 LIMIT 1
-    `).get(candidate.token.mint);
+      SELECT id FROM dry_run_positions WHERE mint = ? AND status = 'closed' AND pnl_percent > 0
+        AND closed_at_ms > ?
+      LIMIT 1
+    `).get(candidate.token.mint, now() - WIN_BLOCK_DAYS * 86400000);
     if (pastWin) {
-      console.log(`[positions] blocked re-entry ${candidate.token.symbol} (${candidate.token.mint.slice(0, 8)}) — past WIN exists (live)`);
+      console.log(`[positions] blocked re-entry ${candidate.token.symbol} (${candidate.token.mint.slice(0, 8)}) — past WIN exists (live, <${WIN_BLOCK_DAYS}d)`);
       return { id: pastWin.id, isNew: false };
     }
 

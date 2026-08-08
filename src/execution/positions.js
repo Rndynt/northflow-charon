@@ -191,8 +191,16 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
   if (!Number.isFinite(Number(mcap)) || !Number.isFinite(Number(position.entry_mcap)) || Number(position.entry_mcap) <= 0) {
     return null;
   }
-  // Guard 2 DISABLED (2026-07-17): drop >80% heuristic can't distinguish crash vs stale bonding curve data
-  const highWaterMcap = Math.max(Number(position.high_water_mcap || 0), Number(mcap));
+  // Guard 2 re-implemented 2026-08-08 as an OBSERVABLE signal (not a block): a >80% single-tick
+  // drop from high-water is logged so it's visible in logs/debugging, but we NO LONGER suppress
+  // the price update (the old disable caused stuck positions — FR#2/Bingus). PANIC/SL handle the
+  // actual exit; this is purely diagnostic. (Original Guard 1/2 were disabled 2026-07-17.)
+  const prevHighWater = Number(position.high_water_mcap || 0);
+  const singleTickDropPct = prevHighWater > 0 ? (Number(mcap) / prevHighWater - 1) * 100 : 0;
+  if (singleTickDropPct <= -80) {
+    console.log(`[position] ${position.id} ${position.symbol} GUARD2 signal: -${Math.abs(singleTickDropPct).toFixed(1)}% from high in one tick (crash) — panic/sl will handle`);
+  }
+  const highWaterMcap = Math.max(prevHighWater, Number(mcap));
   const highWaterPrice = Math.max(Number(position.high_water_price || 0), Number(price || 0));
   let pnlPercent = (Number(mcap) / Number(position.entry_mcap) - 1) * 100;
   const markPnlPercent = pnlPercent;
@@ -283,14 +291,18 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
   const isMicrocap = entryMcap > 0 && entryMcap < 15000;
   const isHighcap = entryMcap >= 60000;
   let effectiveMaxHold = strat?.max_hold_ms ?? 0;
-  // === AUDIT MODE: tiered max_hold disabled for 3-day data collection (2026-07-05) ===
-  // if (isMicrocap) {
-  //   effectiveMaxHold = 600000; // 10 min for microcap <15K
-  //   console.log(`[position] microcap <15K — max_hold reduced to 10min`);
-  // } else if (isHighcap) {
-  //   effectiveMaxHold = 900000; // 15 min for highcap >60K
-  //   console.log(`[position] highcap >60K — max_hold reduced to 15min`);
-  // }
+  // Tiered max_hold by mcap: microcaps (<15K) get a shorter hold (10min) since they're more
+  // volatile; highcaps (>60K) get a longer hold (15min). Restored 2026-08-08 (audit-mode
+  // disable from 2026-07-05 has long passed). Only tightens when strategy didn't set its own.
+  if (!strat?.max_hold_ms) {
+    if (isMicrocap) {
+      effectiveMaxHold = 600000; // 10 min for microcap <15K
+      console.log(`[position] microcap <15K — max_hold reduced to 10min`);
+    } else if (isHighcap) {
+      effectiveMaxHold = 900000; // 15 min for highcap >60K
+      console.log(`[position] highcap >60K — max_hold raised to 15min`);
+    }
+  }
 
   // Partial TP check
   if (!exitReason && strat?.partial_tp && !position.partial_tp_done && pnlPercent >= strat.partial_tp_at_percent) {
