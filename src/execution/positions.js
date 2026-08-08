@@ -230,8 +230,15 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
   // immediately as SL instead of waiting for the next poll where mcap is already -90%.
   // This is what makes the configured stop-loss actually achievable on illiquid tokens.
   const panicExitEnabled = boolSetting('panic_exit_enabled', true);
-  const panicDropPct = numSetting('panic_exit_drop_pct', 30); // exit if dropped >=30% from high-water
-  const panicHit = panicExitEnabled && trailDrop <= -panicDropPct && pnlPercent < 0;
+  const panicDropPct = numSetting('panic_exit_drop_pct', 30); // crash threshold from high-water
+  // PANIC is a LAST-RESORT circuit breaker (lowest priority): it must ONLY fire when the
+  // position is already at a REAL loss AND the price flash-dumps from its high. It must NEVER
+  // exit a position that is still in profit or only marginally red — that job belongs to
+  // TP / TRAILING_TP / SL (which have clear priority above it). panic_floor_pct is the minimum
+  // loss-from-entry (e.g. -2%) required before panic can even consider firing, so a token that
+  // pumped +40% then retraced to -1.5% is left alone to hit its trailing stop, not panic-exited.
+  const panicFloorPct = numSetting('panic_floor_pct', -2);
+  const panicHit = panicExitEnabled && trailDrop <= -panicDropPct && pnlPercent < panicFloorPct;
   // HARD CAP: when the circuit breaker fires, cap the realized loss at the panic
   // drop threshold instead of exiting at the next-poll market price (which can be
   // far below -30% on an instant rug). This makes the configured stop actually
