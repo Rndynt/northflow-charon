@@ -3,7 +3,7 @@ import { numSetting, boolSetting, strategyById, slippageAdjustedMcap } from '../
 import { db } from '../db/connection.js';
 import { firstPositiveNumber, marketCapFromGmgn, tokenPriceFromGmgn, computeAtrPercent, dynamicStopLossPercent } from '../utils.js';
 import { fetchGmgnTokenInfo } from '../enrichment/gmgn.js';
-import { fetchJupiterAsset, fetchJupiterHolders, fetchJupiterChartContext, fetchJupiterWalletPnl, fetchTokenSpotViaQuote } from '../enrichment/jupiter.js';
+import { fetchJupiterAsset, fetchJupiterHolders, fetchJupiterChartContext, fetchJupiterWalletPnl, fetchTokenSpotViaQuote, fetchDexScreenerMcap } from '../enrichment/jupiter.js';
 import { liveWalletPubkey } from '../liveExecutor.js';
 import { fetchSavedWalletExposure } from '../enrichment/wallets.js';
 import { filterCandidate } from '../pipeline/candidateBuilder.js';
@@ -165,9 +165,10 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
   // drive SL/panic checks even when the quote endpoint is down. Previously Promise.all rejected
   // on the first failure, leaving positions un-refreshed (stale) and stuck through a rug.
   const useQuote = position.execution_mode !== 'live' && numSetting('exit_quote_enabled', 1);
-  const [asset, qp] = await Promise.all([
+  const [asset, qp, dex] = await Promise.all([
     fetchJupiterAsset(position.mint, { useCache: false, ttlMs: 3000 }).catch(() => null),
     useQuote ? fetchTokenSpotViaQuote(position.mint).catch(() => null) : Promise.resolve(null),
+    fetchDexScreenerMcap(position.mint).catch(() => null),
   ]);
   const quotePrice = (Number.isFinite(qp) && qp > 0) ? qp : null;
   const quoteMcap = quotePrice && Number(position.entry_price) > 0
@@ -175,9 +176,14 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
     : null;
   const jupiterPrice = Number(asset?.usdPrice);
   const jupiterMcap = firstPositiveNumber(asset?.mcap, asset?.fdv);
+  // DexScreener is a 2nd independent price source (real-time-ish, updated per trade). Used as a
+  // fallback so a Jupiter outage/stale doesn't leave the position un-refreshed. Best-source-wins
+  // is handled by firstPositiveNumber below (quote > jupiter > dexscreener > high-water).
+  const dexPrice = Number(dex?.price);
+  const dexMcap = Number(dex?.mcap);
   // Guard 1 DISABLED (2026-07-17): can't distinguish crash vs stale data — single source (Jupiter) is unreliable
-  const price = firstPositiveNumber(quotePrice, jupiterPrice || null, position.high_water_price, position.entry_price);
-  let mcap = firstPositiveNumber(quoteMcap, jupiterMcap, position.high_water_mcap, position.entry_mcap);
+  const price = firstPositiveNumber(quotePrice, jupiterPrice || null, dexPrice || null, position.high_water_price, position.entry_price);
+  let mcap = firstPositiveNumber(quoteMcap, jupiterMcap, dexMcap, position.high_water_mcap, position.entry_mcap);
   // NOTE (2026-08-08): the STALE_TIMEOUT force-close now runs at the TOP of refreshPosition
   // (before any network call), so the in-body stale check below is intentionally removed to avoid
   // a duplicate identifier. See the block at the start of this function.

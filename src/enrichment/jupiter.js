@@ -347,6 +347,27 @@ async function fetchJupiterWalletPnl(walletAddress) {
   }
 }
 
+export async function fetchDexScreenerMcap(mint) {
+  try {
+    const res = await axios.get(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, {
+      timeout: 8000,
+      headers: JSON_HEADERS,
+    });
+    const pairs = Array.isArray(res.data?.pairs) ? res.data.pairs : [];
+    if (!pairs.length) return null;
+    // Prefer the most liquid pair (best proxy for real price)
+    pairs.sort((a, b) => (Number(b.liquidity?.usd) || 0) - (Number(a.liquidity?.usd) || 0));
+    const best = pairs[0];
+    const mcap = Number(best.marketCap) || Number(best.fdv);
+    const price = Number(best.priceUsd);
+    if (!Number.isFinite(mcap) || mcap <= 0) return null;
+    return { mcap, price, source: 'dexscreener' };
+  } catch (err) {
+    if (err.response?.status !== 429) console.log(`[dexscreener] ${mint.slice(0, 8)}... ${err.response?.status || ''} ${err.message}`);
+    return null;
+  }
+}
+
 export {
   jupiterStatsForInterval,
   normalizeJupiterTrendingRow,
