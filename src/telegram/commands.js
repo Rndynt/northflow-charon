@@ -24,7 +24,7 @@ import {
 } from './menus.js';
 import { sendTelegram, sendBatch, sendPositionOpen } from './send.js';
 import { candidateSummary, formatPosition, positionsListText, filteredPositionsListChunks } from './format.js';
-import { refreshPosition } from '../execution/positions.js';
+import { refreshPosition, sellInProgress } from '../execution/positions.js';
 import { executeLiveSell } from '../execution/router.js';
 import { handleCallback, editMenuMessage } from './callbacks.js';
 import { consumeNumericFilterInput } from './input.js';
@@ -291,25 +291,35 @@ export async function sendPosition(chatId, id, query = null) {
 export async function closePosition(chatId, id, reason) {
   const row = db.prepare('SELECT * FROM dry_run_positions WHERE id = ?').get(id);
   if (!row || row.status !== 'open') return bot.sendMessage(chatId, 'Open position not found.');
-  const result = await refreshPosition(row, { autoExit: false });
-  const price = result?.price ?? row.high_water_price ?? row.entry_price;
-  const mcap = result?.mcap ?? row.high_water_mcap ?? row.entry_mcap;
-  const pnlPercent = row.entry_mcap ? (Number(mcap) / Number(row.entry_mcap) - 1) * 100 : 0;
-  const pnlSol = Number(row.size_sol) * pnlPercent / 100;
-  let sell = null;
-  if (row.execution_mode === 'live') sell = await executeLiveSell(row, reason);
-  db.prepare(`
-    UPDATE dry_run_positions
-    SET status = 'closed', closed_at_ms = ?, exit_price = ?, exit_mcap = ?, exit_reason = ?,
-        pnl_percent = ?, pnl_sol = ?, exit_signature = ?
-    WHERE id = ?
-  `).run(now(), price, mcap, reason, pnlPercent, pnlSol, sell?.signature || null, id);
-  db.prepare(`
-    INSERT INTO dry_run_trades (position_id, mint, side, at_ms, price, mcap, size_sol, token_amount_est, reason, payload_json)
-    VALUES (?, ?, 'sell', ?, ?, ?, ?, ?, ?, ?)
-  `).run(id, row.mint, now(), price, mcap, row.size_sol, row.token_amount_est, reason, json({ pnlPercent, pnlSol, sell }));
-  const label = row.execution_mode === 'live' ? 'Closed live position' : 'Closed dry-run position';
-  await bot.sendMessage(chatId, `${label} #${id}: ${escapeHtml(reason)} ${fmtPct(pnlPercent)}`, { parse_mode: 'HTML' });
+  // Guard against double-exit: if the auto-monitor is already closing this position (SL/TP/PANIC),
+  // don't run a second live sell for the same id. Shares state with refreshPosition's sellInProgress.
+  if (sellInProgress.has(id)) return bot.sendMessage(chatId, `Position #${id} is already being closed.`);
+  sellInProgress.add(id);
+  try {
+    const result = await refreshPosition(row, { autoExit: false });
+    const price = result?.price ?? row.high_water_price ?? row.entry_price;
+    const mcap = result?.mcap ?? row.high_water_mcap ?? row.entry_mcap;
+    const pnlPercent = row.entry_mcap ? (Number(mcap) / Number(row.entry_mcap) - 1) * 100 : 0;
+    const pnlSol = Number(row.size_sol) * pnlPercent / 100;
+    let sell = null;
+    if (row.execution_mode === 'live') sell = await executeLiveSell(row, reason);
+    // Defense-in-depth: only close if still open (monitor may have closed it between the check above and now)
+    const updated = db.prepare(`
+      UPDATE dry_run_positions
+      SET status = 'closed', closed_at_ms = ?, exit_price = ?, exit_mcap = ?, exit_reason = ?,
+          pnl_percent = ?, pnl_sol = ?, exit_signature = ?
+      WHERE id = ? AND status = 'open'
+    `).run(now(), price, mcap, reason, pnlPercent, pnlSol, sell?.signature || null, id);
+    if (updated.changes === 0) return bot.sendMessage(chatId, `Position #${id} was already closed.`);
+    db.prepare(`
+      INSERT INTO dry_run_trades (position_id, mint, side, at_ms, price, mcap, size_sol, token_amount_est, reason, payload_json)
+      VALUES (?, ?, 'sell', ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, row.mint, now(), price, mcap, row.size_sol, row.token_amount_est, reason, json({ pnlPercent, pnlSol, sell }));
+    const label = row.execution_mode === 'live' ? 'Closed live position' : 'Closed dry-run position';
+    await bot.sendMessage(chatId, `${label} #${id}: ${escapeHtml(reason)} ${fmtPct(pnlPercent)}`, { parse_mode: 'HTML' });
+  } finally {
+    sellInProgress.delete(id);
+  }
 }
 
 export async function updatePositionRule(chatId, id, field, nextValue, query = null) {

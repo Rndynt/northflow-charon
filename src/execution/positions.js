@@ -123,6 +123,7 @@ export async function refreshCandidateForExecution(row) {
 }
 
 const sellInProgress = new Set();
+export { sellInProgress };
 
 export async function refreshPosition(position, { autoExit = true, jupiterPnl = null } = {}) {
   // STALE_TIMEOUT safety net (2026-08-08): checked FIRST, before any network call. If a position
@@ -291,17 +292,6 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
   //   console.log(`[position] highcap >60K — max_hold reduced to 15min`);
   // }
 
-  // Sideways timeout: if open too long with negligible PnL, exit to free up capital.
-  if (!exitReason) {
-    const sidewaysMinutes = Number(strat?.sideways_timeout_minutes ?? numSetting('sideways_timeout_minutes', 0));
-    if (sidewaysMinutes > 0) {
-      const ageSeconds = (now() - position.opened_at_ms) / 1000;
-      if (ageSeconds > sidewaysMinutes * 60 && Math.abs(pnlPercent) < 2) {
-        exitReason = 'SIDEWAYS_TIMEOUT';
-      }
-    }
-  }
-
   // Partial TP check
   if (!exitReason && strat?.partial_tp && !position.partial_tp_done && pnlPercent >= strat.partial_tp_at_percent) {
     db.prepare('UPDATE dry_run_positions SET partial_tp_done = 1 WHERE id = ?').run(position.id);
@@ -335,6 +325,19 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
     else if (tpHit && !position.trailing_enabled) exitReason = 'TP';
     else if (trailingHit) exitReason = 'TRAILING_TP';
     else if (panicHit) exitReason = 'PANIC'; // circuit breaker: flash-dump past stop (hard-capped at panic_exit_drop_pct)
+  }
+
+  // Sideways timeout: if open too long with negligible PnL, exit to free up capital.
+  // Evaluated AFTER SL/TP/TRAILING/PANIC so a real stop always takes precedence over a
+  // sideways exit (keeps /learn exit reasons honest under tuning).
+  if (!exitReason) {
+    const sidewaysMinutes = Number(strat?.sideways_timeout_minutes ?? numSetting('sideways_timeout_minutes', 0));
+    if (sidewaysMinutes > 0) {
+      const ageSeconds = (now() - position.opened_at_ms) / 1000;
+      if (ageSeconds > sidewaysMinutes * 60 && Math.abs(pnlPercent) < 2) {
+        exitReason = 'SIDEWAYS_TIMEOUT';
+      }
+    }
   }
 
   // MAX_HOLD — only if no stop/profit fired above

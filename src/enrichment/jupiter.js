@@ -230,7 +230,12 @@ async function fetchJupiterChartWindow(mint, interval, candles, label) {
   }
 }
 
-async function fetchJupiterChartContext(mint) {
+const chartContextCache = new Map(); // mint -> { at, data }
+const CHART_CONTEXT_TTL_MS = 30_000; // ATR context doesn't change in seconds; cache to avoid 429 storms at 1s poll
+
+async function fetchJupiterChartContext(mint, { ttlMs = CHART_CONTEXT_TTL_MS } = {}) {
+  const cached = chartContextCache.get(mint);
+  if (cached && (now() - cached.at) < ttlMs) return cached.data;
   const windows = [
     ['5_MINUTE', 288, 'ath_context_24h_5m'],
     ['1_HOUR', 168, 'swing_7d_1h'],
@@ -248,7 +253,7 @@ async function fetchJupiterChartContext(mint) {
   const topBlastRisk = Number.isFinite(Number(currentNative)) && Number.isFinite(Number(rangeHigh)) && rangeHigh > 0
     ? currentNative / rangeHigh >= 0.85
     : null;
-  return {
+  const data = {
     quote: 'native',
     purpose: 'ATH/range context, not momentum scoring',
     currentNative,
@@ -258,6 +263,8 @@ async function fetchJupiterChartContext(mint) {
     topBlastRisk,
     windows: results,
   };
+  chartContextCache.set(mint, { at: now(), data });
+  return data;
 }
 
 const IGNORED_PNL_MINTS = new Set([
