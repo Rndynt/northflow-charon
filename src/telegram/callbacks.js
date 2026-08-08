@@ -24,6 +24,7 @@ import { storeDecision, logDecisionEvent } from '../db/decisions.js';
 import { createDryRunPosition, canOpenMorePositions, openPositionCount, tradingMode } from '../db/positions.js';
 import { executeLiveBuy, executeConfirmedIntent, rejectIntent } from '../execution/router.js';
 import { sendCandidate, sendPosition, closePosition, updatePositionRule, toggleTrailing, sendFilteredPositions, askCloseAllConfirmation, closeAllOpenPositions } from './commands.js';
+import { importGmgnSmartWallets } from '../enrichment/wallets.js';
 import { requestNumericFilterInput, requestStrategyNumericInput } from './input.js';
 
 export async function handleCallback(query) {
@@ -55,7 +56,18 @@ export async function handleCallback(query) {
   }
   if (data === 'menu:filters') return editMenuMessage(query, filtersText(), filtersKeyboard());
   if (data === 'menu:strategy') return editMenuMessage(query, strategyMenuText(), strategyKeyboard());
-  if (data === 'menu:wallets') return editMenuMessage(query, walletsText(), navKeyboard());
+  if (data === 'menu:wallets') return editMenuMessage(query, walletsText(), navKeyboard([[{ text: '🔄 Update Smart Money', callback_data: 'action:update_smart_wallets' }]]));
+  if (data === 'action:update_smart_wallets') {
+    await editMenuMessage(query, `⏳ Fetching smart-money wallets from GMGN…`, navKeyboard());
+    try {
+      const r = await importGmgnSmartWallets({ limit: 100 });
+      return editMenuMessage(query,
+        `✅ Smart-money wallets imported:\n• fetched: ${r.fetched}\n• inserted (new): ${r.inserted}\n• total saved_wallets: ${r.total}\n\nUsed by candidate scoring (smart_money exposure).`,
+        navKeyboard());
+    } catch (e) {
+      return editMenuMessage(query, `❌ Failed: ${e.message}`, navKeyboard());
+    }
+  }
   if (data === 'menu:routes') {
     const { routesMenuText, routesKeyboard } = await import('./menus.js');
     return editMenuMessage(query, routesMenuText(), routesKeyboard());

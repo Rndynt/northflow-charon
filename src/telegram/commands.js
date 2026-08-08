@@ -117,11 +117,28 @@ export async function handleMessage(msg) {
     return bot.sendMessage(chatId, `Removed ${label}.`);
   }
   if (text.startsWith('/updatesmartwallets')) {
-    await bot.sendMessage(chatId, '⏳ Fetching smart-money wallets from GMGN…');
+    const parts = text.split(/\s+/).slice(1);
+    const opts = { limit: 100, chain: 'sol', tags: '', minWinRate: 0, minPnlSol: 0 };
+    // positional: limit, tags  — then flags --wr N --pnl N
+    const positional = [];
+    for (let i = 0; i < parts.length; i++) {
+      if (parts[i] === '--wr') { opts.minWinRate = Number(parts[++i]) || 0; }
+      else if (parts[i] === '--pnl') { opts.minPnlSol = Number(parts[++i]) || 0; }
+      else positional.push(parts[i]);
+    }
+    if (positional[0] && Number(positional[0])) opts.limit = Number(positional[0]);
+    if (positional[1]) opts.tags = positional[1];
+    const filterDesc = [
+      `limit=${opts.limit}`,
+      opts.tags ? `tags=${opts.tags}` : null,
+      opts.minWinRate ? `wr>=${opts.minWinRate}` : null,
+      opts.minPnlSol ? `pnl>=${opts.minPnlSol} SOL` : null,
+    ].filter(Boolean).join(', ');
+    await bot.sendMessage(chatId, `⏳ Fetching smart-money wallets from GMGN (${filterDesc})…`);
     try {
-      const r = await importGmgnSmartWallets({ limit: 100 });
+      const r = await importGmgnSmartWallets(opts);
       return bot.sendMessage(chatId,
-        `✅ Smart-money wallets imported:\n• fetched: ${r.fetched}\n• inserted (new): ${r.inserted}\n• total saved_wallets: ${r.total}\n\nUsed by candidate scoring (smart_money exposure).`);
+        `✅ Smart-money wallets imported:\n• fetched (after filter): ${r.fetched}\n• inserted (new): ${r.inserted}\n• total saved_wallets: ${r.total}\n\nUsed by candidate scoring (smart_money exposure).`);
     } catch (e) {
       return bot.sendMessage(chatId, `❌ Failed: ${e.message}`);
     }

@@ -20,12 +20,21 @@ export async function fetchSavedWalletExposure(mint, holders) {
 }
 
 import { spawn } from 'node:child_process';
+import { sleep } from '../utils.js';
 
 // Pull the active smart-money trade feed from GMGN via the official gmgn-cli and return the
 // unique wallet addresses seen trading (with their tag labels). Manual trigger only — no auto-run.
 // Requires gmgn-cli installed globally and GMGN_API_KEY / GMGN_PRIVATE_KEY set in the environment.
-export async function fetchGmgnSmartWallets({ limit = 100, chain = 'sol' } = {}) {
-  return new Promise((resolve, reject) => {
+//
+// opts:
+//   limit        number of trades to fetch from the feed (default 100)
+//   chain        'sol' | 'bsc' | 'base' | 'eth' (default 'sol')
+//   tags         comma-separated required tags, e.g. 'smart_degen,kol' — wallet kept only if it has ALL
+//   minWinRate   0..1 — if set, query gmgn portfolio stats per wallet and keep only winrate >= this
+//   minPnlSol    number — if set, keep only wallets with realized_profit (SOL) >= this
+// Note: minWinRate/minPnlSol require one extra gmgn-cli call per wallet (rate-limited ~20/s burst).
+export async function fetchGmgnSmartWallets({ limit = 100, chain = 'sol', tags = '', minWinRate = 0, minPnlSol = 0 } = {}) {
+  const raw = await new Promise((resolve, reject) => {
     const args = ['track', 'smartmoney', '--chain', chain, '--limit', String(limit), '--raw'];
     const proc = spawn('gmgn-cli', args, { env: process.env });
     let out = '', err = '';
@@ -33,20 +42,59 @@ export async function fetchGmgnSmartWallets({ limit = 100, chain = 'sol' } = {})
     proc.stderr.on('data', (d) => (err += d));
     proc.on('close', (code) => {
       if (code !== 0) return reject(new Error(`gmgn-cli exited ${code}: ${err.slice(0, 200)}`));
+      resolve(out);
+    });
+  });
+  const parsed = JSON.parse(raw.trim());
+  const list = parsed?.list || parsed?.data?.list || [];
+  const seen = new Map();
+  for (const t of list) {
+    const addr = t.maker || t.wallet || t.address;
+    if (!addr || seen.has(addr)) continue;
+    const tagList = (t.maker_info?.tags || []);
+    seen.set(addr, tagList.join(','));
+  }
+  let wallets = [...seen.entries()].map(([address, tags]) => ({ address, tags }));
+
+  // Tag filter
+  const reqTags = (tags || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (reqTags.length) {
+    wallets = wallets.filter(w => {
+      const have = new Set(w.tags.split(',').filter(Boolean));
+      return reqTags.every(rt => have.has(rt));
+    });
+  }
+
+  // PnL / WR filter (requires per-wallet stats query)
+  if (minWinRate > 0 || minPnlSol > 0) {
+    const filtered = [];
+    for (const w of wallets) {
       try {
-        const parsed = JSON.parse(out.trim());
-        const list = parsed?.list || parsed?.data?.list || [];
-        const seen = new Map();
-        for (const t of list) {
-          const addr = t.maker || t.wallet || t.address;
-          if (!addr || seen.has(addr)) continue;
-          const tags = (t.maker_info?.tags || []).join(',');
-          seen.set(addr, tags);
-        }
-        resolve([...seen.entries()].map(([address, tags]) => ({ address, tags })));
-      } catch (e) {
-        reject(new Error(`parse failed: ${e.message} raw=${out.slice(0, 120)}`));
+        const stats = await queryWalletStats(w.address, chain);
+        const wr = Number(stats?.pnl_stat?.winrate || 0);
+        const pnlSol = Number(stats?.realized_profit || 0);
+        if (wr >= minWinRate && pnlSol >= minPnlSol) filtered.push(w);
+      } catch {
+        // skip wallets we can't score
       }
+      await sleep(1000); // respect GMGN ~20/s burst limit (weight varies per route)
+    }
+    wallets = filtered;
+  }
+
+  return wallets;
+}
+
+// Query gmgn portfolio stats for a single wallet (used for PnL/WR filtering).
+function queryWalletStats(address, chain) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn('gmgn-cli', ['portfolio', 'stats', '--chain', chain, '--wallet', address, '--raw'], { env: process.env });
+    let out = '', err = '';
+    proc.stdout.on('data', (d) => (out += d));
+    proc.stderr.on('data', (d) => (err += d));
+    proc.on('close', (code) => {
+      if (code !== 0) return reject(new Error(`stats exited ${code}: ${err.slice(0, 120)}`));
+      try { resolve(JSON.parse(out.trim())); } catch (e) { reject(e); }
     });
   });
 }
