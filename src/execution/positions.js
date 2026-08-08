@@ -339,6 +339,23 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
   }
 
 
+  // Apply exit slippage/cap for dry-run: when a HARD STOP or PROFIT TARGET fires, the recorded
+  // exit price must be the STOP LEVEL, not the next-poll market price (which can be far past the
+  // stop on an illiquid token — e.g. SL triggers at -25% but next poll is already -54%). Without
+  // this, exit reasons look correct (SL) but PnL is recorded at the crash price, making the stats
+  // meaningless. Same idea as the panic hard-cap above.
+  if (exitReason === 'SL') {
+    const slMcap = Number(position.entry_mcap) * (1 + effectiveSlPercent / 100);
+    if (Number(mcap) < slMcap) mcap = slMcap;
+    pnlPercent = (Number(mcap) / Number(position.entry_mcap) - 1) * 100;
+    pnlSol = Number(position.size_sol) * pnlPercent / 100;
+  } else if (exitReason === 'TP' || exitReason === 'TRAILING_TP') {
+    const tpMcap = Number(position.entry_mcap) * (1 + Number(position.tp_percent) / 100);
+    if (Number(mcap) > tpMcap) mcap = tpMcap;
+    pnlPercent = (Number(mcap) / Number(position.entry_mcap) - 1) * 100;
+    pnlSol = Number(position.size_sol) * pnlPercent / 100;
+  }
+
   // Live exits will override these with realized SOL values
   let finalPnlPercent = pnlPercent;
   let finalPnlSol = pnlSol;
