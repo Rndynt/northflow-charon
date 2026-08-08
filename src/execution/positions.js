@@ -241,14 +241,12 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
   const panicHit = panicExitEnabled && trailDrop <= -panicDropPct && pnlPercent < panicFloorPct;
   // HARD CAP: when the circuit breaker fires, cap the realized loss at the panic
   // drop threshold instead of exiting at the next-poll market price (which can be
-  // far below -30% on an instant rug). This makes the configured stop actually
-  // achievable. Applies to both dry-run stats and live exit pricing.
-  let panicCapMcap = null;
+  // far below -30% on an instant rug). Recorded PnL uses the REAL exit price (next-poll market
+  // price), NOT a capped value — we never fabricate the stop level. The circuit breaker's job is
+  // to EXIT promptly on a flash-dump (before the next poll where mcap is already -90%), but the
+  // realized PnL is whatever the real price was when we detected it.
   if (panicHit && highWaterMcap > 0) {
-    panicCapMcap = highWaterMcap * (1 - panicDropPct / 100);
-    // Recompute pnl against the capped exit so the recorded loss is bounded.
-    mcap = panicCapMcap;
-    pnlPercent = (Number(mcap) / Number(position.entry_mcap) - 1) * 100;
+    console.log(`[position] ${position.id} ${position.symbol} PANIC circuit breaker — flash dump -${panicDropPct}% from high, exiting at real price`);
   }
   // EXIT-FIX 2026-07-25 (backtest 933 trades 07-22..25: base +1,685% -> +8,766% ideal / +6,314% gap).
   // (1) TIGHT TRAIL: once peak pnl >= trailing_tight_from_percent (40), trail tightens from
@@ -338,23 +336,6 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
     exitReason = 'MAX_HOLD';
   }
 
-
-  // Apply exit slippage/cap for dry-run: when a HARD STOP or PROFIT TARGET fires, the recorded
-  // exit price must be the STOP LEVEL, not the next-poll market price (which can be far past the
-  // stop on an illiquid token — e.g. SL triggers at -25% but next poll is already -54%). Without
-  // this, exit reasons look correct (SL) but PnL is recorded at the crash price, making the stats
-  // meaningless. Same idea as the panic hard-cap above.
-  if (exitReason === 'SL') {
-    const slMcap = Number(position.entry_mcap) * (1 + effectiveSlPercent / 100);
-    if (Number(mcap) < slMcap) mcap = slMcap;
-    pnlPercent = (Number(mcap) / Number(position.entry_mcap) - 1) * 100;
-    pnlSol = Number(position.size_sol) * pnlPercent / 100;
-  } else if (exitReason === 'TP' || exitReason === 'TRAILING_TP') {
-    const tpMcap = Number(position.entry_mcap) * (1 + Number(position.tp_percent) / 100);
-    if (Number(mcap) > tpMcap) mcap = tpMcap;
-    pnlPercent = (Number(mcap) / Number(position.entry_mcap) - 1) * 100;
-    pnlSol = Number(position.size_sol) * pnlPercent / 100;
-  }
 
   // Live exits will override these with realized SOL values
   let finalPnlPercent = pnlPercent;
