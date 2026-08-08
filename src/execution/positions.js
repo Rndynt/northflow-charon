@@ -125,13 +125,49 @@ export async function refreshCandidateForExecution(row) {
 const sellInProgress = new Set();
 
 export async function refreshPosition(position, { autoExit = true, jupiterPnl = null } = {}) {
+  // STALE_TIMEOUT safety net (2026-08-08): checked FIRST, before any network call. If a position
+  // hasn't been refreshed in stale_timeout_minutes AND we cannot get a fresh price, force-close it.
+  // This runs regardless of whether the price feed is up or down — a position that goes un-polled
+  // for >staleTimeout (bot crash, network dead, rug) must never hang open forever. We close at the
+  // last known current_mcap so the recorded loss is bounded.
+  // GUARD: only force-close LOSING positions (pnl < 0). Profitable positions are left open so a bot
+  // restart / brief poll gap never throws away a winner (e.g. +125% CHILLGUY).
+  const staleTimeoutMin = Number(numSetting('stale_timeout_minutes', 10));
+  const lastChecked = Number(position.last_checked_at_ms || 0);
+  const staleAgeMs = now() - lastChecked;
+  if (staleTimeoutMin > 0 && lastChecked > 0 && staleAgeMs >= staleTimeoutMin * 60 * 1000) {
+    const stalePnl = Number(position.pnl_percent || 0);
+    if (stalePnl < 0) {
+      console.log(`[position] ${position.id} ${position.symbol} un-refreshed ${(staleAgeMs / 60000).toFixed(1)}min, loss ${stalePnl.toFixed(1)}% — forcing STALE_TIMEOUT close`);
+      const exitMcap = Number(position.current_mcap) || Number(position.high_water_mcap) || Number(position.entry_mcap);
+      const exitPrice = Number(position.current_price) || Number(position.high_water_price) || Number(position.entry_price);
+      if (autoExit) {
+        db.prepare(`
+          UPDATE dry_run_positions
+          SET status = 'closed', closed_at_ms = ?, exit_price = ?, exit_mcap = ?, exit_reason = ?,
+              pnl_percent = ?, pnl_sol = ?
+          WHERE id = ? AND status = 'open'
+        `).run(now(), exitPrice, exitMcap, 'STALE_TIMEOUT',
+          (Number(exitMcap) / Number(position.entry_mcap) - 1) * 100,
+          Number(position.size_sol) * ((Number(exitMcap) / Number(position.entry_mcap) - 1) * 100) / 100,
+          position.id);
+        return { ...position, exitReason: 'STALE_TIMEOUT', status: 'closed' };
+      }
+    } else {
+      console.log(`[position] ${position.id} ${position.symbol} un-refreshed ${(staleAgeMs / 60000).toFixed(1)}min but profitable (${stalePnl.toFixed(1)}%) — skipping STALE_TIMEOUT`);
+    }
+  }
   // Bug2 fix (2026-06-19): bypass 20s cache for live monitoring — flash crash detection requires fresh data
   // Quote-first (2026-07-24): dry_run exit decisions use executable Jupiter quote (live pool
   // reserves) as primary price — datapi mark is stale by design. Mark = fallback on 429/backoff.
+  // FIX (2026-08-08): fetch asset and quote INDEPENDENTLY. A failing quote feed (ECONNRESET/429)
+  // must NOT abort the whole refresh — Jupiter asset price is the primary signal and must still
+  // drive SL/panic checks even when the quote endpoint is down. Previously Promise.all rejected
+  // on the first failure, leaving positions un-refreshed (stale) and stuck through a rug.
   const useQuote = position.execution_mode !== 'live' && numSetting('exit_quote_enabled', 1);
   const [asset, qp] = await Promise.all([
-    fetchJupiterAsset(position.mint, { useCache: false, ttlMs: 3000 }),
-    useQuote ? fetchTokenSpotViaQuote(position.mint) : Promise.resolve(null),
+    fetchJupiterAsset(position.mint, { useCache: false, ttlMs: 3000 }).catch(() => null),
+    useQuote ? fetchTokenSpotViaQuote(position.mint).catch(() => null) : Promise.resolve(null),
   ]);
   const quotePrice = (Number.isFinite(qp) && qp > 0) ? qp : null;
   const quoteMcap = quotePrice && Number(position.entry_price) > 0
@@ -142,6 +178,9 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
   // Guard 1 DISABLED (2026-07-17): can't distinguish crash vs stale data — single source (Jupiter) is unreliable
   const price = firstPositiveNumber(quotePrice, jupiterPrice || null, position.high_water_price, position.entry_price);
   const mcap = firstPositiveNumber(quoteMcap, jupiterMcap, position.high_water_mcap, position.entry_mcap);
+  // NOTE (2026-08-08): the STALE_TIMEOUT force-close now runs at the TOP of refreshPosition
+  // (before any network call), so the in-body stale check below is intentionally removed to avoid
+  // a duplicate identifier. See the block at the start of this function.
   if (!Number.isFinite(Number(mcap)) || !Number.isFinite(Number(position.entry_mcap)) || Number(position.entry_mcap) <= 0) {
     return null;
   }

@@ -10,6 +10,7 @@ const EXIT_REASON_LABELS = {
   SIDEWAYS_TIMEOUT: 'SIDEWAYS_TIMEOUT',
   MANUAL_CLOSE: 'MANUAL_CLOSE',
   MANUAL_CLOSE_ALL: 'MANUAL_CLOSE_ALL',
+  STALE_TIMEOUT: 'STALE_TIMEOUT (feed dead)',
 };
 
 export function exitReasonLabel(reason, position = null) {
