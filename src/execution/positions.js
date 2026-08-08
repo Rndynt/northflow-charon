@@ -177,7 +177,7 @@ export async function refreshPosition(position, { autoExit = true, jupiterPnl = 
   const jupiterMcap = firstPositiveNumber(asset?.mcap, asset?.fdv);
   // Guard 1 DISABLED (2026-07-17): can't distinguish crash vs stale data — single source (Jupiter) is unreliable
   const price = firstPositiveNumber(quotePrice, jupiterPrice || null, position.high_water_price, position.entry_price);
-  const mcap = firstPositiveNumber(quoteMcap, jupiterMcap, position.high_water_mcap, position.entry_mcap);
+  let mcap = firstPositiveNumber(quoteMcap, jupiterMcap, position.high_water_mcap, position.entry_mcap);
   // NOTE (2026-08-08): the STALE_TIMEOUT force-close now runs at the TOP of refreshPosition
   // (before any network call), so the in-body stale check below is intentionally removed to avoid
   // a duplicate identifier. See the block at the start of this function.
